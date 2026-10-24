@@ -126,6 +126,7 @@
   th:last-child, td:last-child{padding-right:0}
   tr.ship td{font-weight:700}
   td.hit{color:var(--urgent); font-weight:700}
+  td .metric{display:block; font-size:13.5px; color:var(--ink-2); margin-top:2px}
   .fine{font-size:15.5px; color:var(--ink-2)}
 
   .two{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:40px; max-width:960px}
@@ -331,6 +332,44 @@
   .tp-ghost.now text{fill:var(--ink); font-weight:700}
   .tp-ghost.now circle{opacity:0}
   .tp-ghost.later{display:none}
+  /* threshold charts: score strip and trade-off curve */
+  .strip{position:relative; margin:0 14px; padding-top:22px}
+  .st-up, .st-dn{position:relative}
+  .st-mid{height:1px; background:var(--ink-3)}
+  .strip i{position:absolute; width:6px; height:6px; margin-left:-3px; border-radius:50%}
+  .strip i.u{background:var(--urgent)}
+  .strip i.n{border:1.5px solid var(--ink-3); background:var(--paper)}
+  .st-cut{position:absolute; top:0; bottom:0; width:0; border-left:1.5px dashed var(--ink)}
+  .st-cut span{position:absolute; top:0; left:6px; font-size:12.5px; font-weight:700; white-space:nowrap}
+  .st-side{position:absolute; top:22px; font-size:13.5px; color:var(--ink-2); line-height:1.3}
+  .st-side b{display:block; font-size:20px; font-weight:800; color:var(--urgent)}
+  .st-side.l{left:0} .st-side.r{right:0; text-align:right}
+  .st-axis{margin-left:14px}
+  .bar-key i.hollow{border:1.5px solid var(--ink-3); border-radius:50%; background:none}
+  .viz.tr-fig{max-width:520px}
+  /* hover / tap readouts on the threshold charts */
+  .hov{position:relative}
+  .hint{display:flex; align-items:center; gap:6px; margin:0 0 12px; font-size:13.5px; color:var(--ink-2)}
+  .hint svg{width:14px; height:14px; fill:var(--ink-2); flex:none}
+  .strip i{cursor:pointer; transition:transform .12s}
+  .strip i::after{content:""; position:absolute; inset:-3px}
+  .strip i:hover, .strip i.on{transform:scale(1.8); z-index:2; box-shadow:0 0 0 1.5px var(--paper)}
+  .tr-hit{fill:var(--ink-3); stroke:transparent; stroke-width:12; cursor:pointer; transform-box:fill-box; transform-origin:center; transition:transform .12s}
+  .tr-hit:hover, .tr-hit.on{fill:var(--ink); transform:scale(2)}
+  .tr-pt circle{cursor:pointer}
+  .tr-pt circle.on{stroke-width:3}
+  .tip{position:absolute; z-index:5; left:0; top:0; pointer-events:none; opacity:0; transition:opacity .1s;
+    transform:translate(-50%, calc(-100% - 10px)); padding:7px 10px; border-radius:6px; white-space:nowrap;
+    background:var(--ink); color:var(--paper); font-size:13px; line-height:1.4}
+  .tip b{display:block}
+  .tip.show{opacity:1}
+  @media (prefers-reduced-motion: reduce){ .strip i, .tr-hit, .tip{transition:none} }
+  .tr{display:block; width:100%; height:auto; overflow:visible; font-family:var(--sans)}
+  .tr-curve{fill:none; stroke:var(--ink-2); stroke-width:2; stroke-linejoin:round}
+  .tr-pt circle{stroke-width:2}
+  .tr-pt.base circle{fill:var(--paper); stroke:var(--ink-2)}
+  .tr-pt.screen circle{fill:var(--ink); stroke:var(--paper)}
+  .tr-pt text{fill:var(--ink); font-size:12px; font-weight:700; paint-order:stroke; stroke:var(--paper); stroke-width:3px}
   .tp-dot{transition:transform .8s cubic-bezier(.2,.8,.2,1)}
   .tp-dot circle{fill:var(--ink)}
   .tp-dot .halo{fill:var(--ink); opacity:.14}
@@ -425,7 +464,7 @@
   <div class="col">
     <h2>Ask the question that matters, first</h2>
     <p class="lead">Triage is not a classification problem. The errors are not the same size: an urgent message left in a three-day queue is not offset by two prescription refills routed correctly.</p>
-    <p>So the agent does not start by diagnosing. It starts with the decision a portal actually has to make, asked in plain words: can this message safely wait for a physician&rsquo;s reply?</p>
+    <p>So the agent does not start by diagnosing. It starts with the decision a portal actually has to make, asked in plain words: can this message safely wait for a physician&rsquo;s reply? The answer is one of three words, not a probability, for a reason explained under <a href="#thresholds">why probabilities did not work</a>.</p>
   </div>
 
   <figure class="viz">
@@ -541,6 +580,52 @@
     </table>
   </div>
   <p class="col fine">The two keyword rows are that screen on its own, on PMR-Bench&rsquo;s Reddit test split (362 messages), scored against the benchmark&rsquo;s levels. The baseline and the LLM urgency screen are scored on the same 100-message test set as the rest of this page, against the physician&rsquo;s labels. The two pairs are not directly comparable, but the gap is not subtle.</p>
+
+  <div class="col" id="thresholds">
+    <h3>Why probabilities did not work</h3>
+    <p>The baseline&rsquo;s probabilities were good at ranking. Picking one urgent and one non-urgent message at random, the urgent one scored higher 95% of the time on dev, 90% on val and 92% on test (the AUROC). Where they failed was calibration: urgent messages often got low probabilities, so the frozen thresholds of 5%, 20% and 50% had a recall of only 50% on dev, 69% on val and 51% on test. A third to a half of urgent messages were let wait.</p>
+  </div>
+  <figure class="viz hov">
+    <p class="hint"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5v11l3-2.6 2 4.6 2-.9-2-4.5h4z"/></svg>Hover or tap any dot to see its score</p>
+    <div class="strip" role="img" aria-label="Test set scores: 34 of 70 urgent messages fall below the frozen cutoff, a recall of 51%, while non-urgent messages sit almost entirely below it">
+      <div class="st-up" style="height:74px"><i class="u" style="left:15.28%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.08&times; the threshold &middot; let wait"></i><i class="u" style="left:26.39%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.15&times; the threshold &middot; let wait"></i><i class="u" style="left:31.94%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.24&times; the threshold &middot; let wait"></i><i class="u" style="left:31.94%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.24&times; the threshold &middot; let wait"></i><i class="u" style="left:31.94%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 0.24&times; the threshold &middot; let wait"></i><i class="u" style="left:37.50%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.3&times; the threshold &middot; let wait"></i><i class="u" style="left:37.50%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.35&times; the threshold &middot; let wait"></i><i class="u" style="left:40.28%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="u" style="left:40.28%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="u" style="left:40.28%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="u" style="left:40.28%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="u" style="left:45.83%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.5&times; the threshold &middot; let wait"></i><i class="u" style="left:45.83%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.5&times; the threshold &middot; let wait"></i><i class="u" style="left:45.83%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 0.5&times; the threshold &middot; let wait"></i><i class="u" style="left:45.83%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 0.5&times; the threshold &middot; let wait"></i><i class="u" style="left:45.83%;bottom:31px" data-tip-h="Urgent message" data-tip="Score 0.5&times; the threshold &middot; let wait"></i><i class="u" style="left:48.61%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="u" style="left:48.61%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="u" style="left:48.61%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="u" style="left:48.61%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="u" style="left:48.61%;bottom:31px" data-tip-h="Urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="u" style="left:48.61%;bottom:38px" data-tip-h="Urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.75&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.75&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 0.75&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 0.75&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:31px" data-tip-h="Urgent message" data-tip="Score 0.8&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:38px" data-tip-h="Urgent message" data-tip="Score 0.8&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:45px" data-tip-h="Urgent message" data-tip="Score 0.8&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:52px" data-tip-h="Urgent message" data-tip="Score 0.8&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:59px" data-tip-h="Urgent message" data-tip="Score 0.8&times; the threshold &middot; let wait"></i><i class="u" style="left:51.39%;bottom:66px" data-tip-h="Urgent message" data-tip="Score 0.8&times; the threshold &middot; let wait"></i><i class="u" style="left:54.17%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 0.9&times; the threshold &middot; let wait"></i><i class="u" style="left:54.17%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 0.9&times; the threshold &middot; let wait"></i><i class="u" style="left:56.94%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 1.1&times; the threshold &middot; escalated"></i><i class="u" style="left:56.94%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 1.1&times; the threshold &middot; escalated"></i><i class="u" style="left:56.94%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 1.1&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 1.2&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 1.2&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 1.25&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 1.25&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:31px" data-tip-h="Urgent message" data-tip="Score 1.25&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:38px" data-tip-h="Urgent message" data-tip="Score 1.3&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:45px" data-tip-h="Urgent message" data-tip="Score 1.4&times; the threshold &middot; escalated"></i><i class="u" style="left:59.72%;bottom:52px" data-tip-h="Urgent message" data-tip="Score 1.4&times; the threshold &middot; escalated"></i><i class="u" style="left:62.50%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 1.5&times; the threshold &middot; escalated"></i><i class="u" style="left:62.50%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 1.5&times; the threshold &middot; escalated"></i><i class="u" style="left:62.50%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 1.5&times; the threshold &middot; escalated"></i><i class="u" style="left:62.50%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 1.5&times; the threshold &middot; escalated"></i><i class="u" style="left:68.06%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 2&times; the threshold &middot; escalated"></i><i class="u" style="left:68.06%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 2&times; the threshold &middot; escalated"></i><i class="u" style="left:68.06%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 2&times; the threshold &middot; escalated"></i><i class="u" style="left:70.83%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 2.4&times; the threshold &middot; escalated"></i><i class="u" style="left:73.61%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 3&times; the threshold &middot; escalated"></i><i class="u" style="left:76.39%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 3.75&times; the threshold &middot; escalated"></i><i class="u" style="left:84.72%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 6&times; the threshold &middot; escalated"></i><i class="u" style="left:84.72%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 6&times; the threshold &middot; escalated"></i><i class="u" style="left:84.72%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 6&times; the threshold &middot; escalated"></i><i class="u" style="left:84.72%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 6&times; the threshold &middot; escalated"></i><i class="u" style="left:87.50%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 7&times; the threshold &middot; escalated"></i><i class="u" style="left:87.50%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 7&times; the threshold &middot; escalated"></i><i class="u" style="left:90.28%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 8&times; the threshold &middot; escalated"></i><i class="u" style="left:90.28%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 8&times; the threshold &middot; escalated"></i><i class="u" style="left:90.28%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 8&times; the threshold &middot; escalated"></i><i class="u" style="left:93.06%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 10&times; the threshold &middot; escalated"></i><i class="u" style="left:93.06%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 10&times; the threshold &middot; escalated"></i><i class="u" style="left:93.06%;bottom:17px" data-tip-h="Urgent message" data-tip="Score 11&times; the threshold &middot; escalated"></i><i class="u" style="left:93.06%;bottom:24px" data-tip-h="Urgent message" data-tip="Score 11&times; the threshold &middot; escalated"></i><i class="u" style="left:95.83%;bottom:3px" data-tip-h="Urgent message" data-tip="Score 12&times; the threshold &middot; escalated"></i><i class="u" style="left:95.83%;bottom:10px" data-tip-h="Urgent message" data-tip="Score 12&times; the threshold &middot; escalated"></i></div>
+      <div class="st-mid"></div>
+      <div class="st-dn" style="height:46px"><i class="n" style="left:4.17%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.04&times; the threshold &middot; let wait"></i><i class="n" style="left:15.28%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.08&times; the threshold &middot; let wait"></i><i class="n" style="left:15.28%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.08&times; the threshold &middot; let wait"></i><i class="n" style="left:15.28%;top:17px" data-tip-h="Non-urgent message" data-tip="Score 0.08&times; the threshold &middot; let wait"></i><i class="n" style="left:18.06%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.1&times; the threshold &middot; let wait"></i><i class="n" style="left:18.06%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.1&times; the threshold &middot; let wait"></i><i class="n" style="left:20.83%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.12&times; the threshold &middot; let wait"></i><i class="n" style="left:23.61%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.14&times; the threshold &middot; let wait"></i><i class="n" style="left:26.39%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.15&times; the threshold &middot; let wait"></i><i class="n" style="left:26.39%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.16&times; the threshold &middot; let wait"></i><i class="n" style="left:26.39%;top:17px" data-tip-h="Non-urgent message" data-tip="Score 0.16&times; the threshold &middot; let wait"></i><i class="n" style="left:26.39%;top:24px" data-tip-h="Non-urgent message" data-tip="Score 0.16&times; the threshold &middot; let wait"></i><i class="n" style="left:29.17%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.2&times; the threshold &middot; let wait"></i><i class="n" style="left:29.17%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.2&times; the threshold &middot; let wait"></i><i class="n" style="left:29.17%;top:17px" data-tip-h="Non-urgent message" data-tip="Score 0.2&times; the threshold &middot; let wait"></i><i class="n" style="left:29.17%;top:24px" data-tip-h="Non-urgent message" data-tip="Score 0.2&times; the threshold &middot; let wait"></i><i class="n" style="left:29.17%;top:31px" data-tip-h="Non-urgent message" data-tip="Score 0.2&times; the threshold &middot; let wait"></i><i class="n" style="left:31.94%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.24&times; the threshold &middot; let wait"></i><i class="n" style="left:31.94%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.24&times; the threshold &middot; let wait"></i><i class="n" style="left:37.50%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.3&times; the threshold &middot; let wait"></i><i class="n" style="left:37.50%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.3&times; the threshold &middot; let wait"></i><i class="n" style="left:40.28%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="n" style="left:40.28%;top:10px" data-tip-h="Non-urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="n" style="left:40.28%;top:17px" data-tip-h="Non-urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="n" style="left:40.28%;top:24px" data-tip-h="Non-urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="n" style="left:40.28%;top:31px" data-tip-h="Non-urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="n" style="left:40.28%;top:38px" data-tip-h="Non-urgent message" data-tip="Score 0.4&times; the threshold &middot; let wait"></i><i class="n" style="left:45.83%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.5&times; the threshold &middot; let wait"></i><i class="n" style="left:48.61%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 0.6&times; the threshold &middot; let wait"></i><i class="n" style="left:56.94%;top:3px" data-tip-h="Non-urgent message" data-tip="Score 1&times; the threshold &middot; escalated"></i></div>
+      <div class="st-cut" style="left:55.56%"><span>frozen cutoff</span></div>
+      <div class="st-side l"><b>34 of 70</b> urgent let wait</div>
+      <div class="st-side r"><b>36 of 70</b> urgent escalated: recall 51%</div>
+    </div>
+    <div class="axis st-axis"><span style="left:0.00%">1/32</span><span style="left:11.11%">1/16</span><span style="left:22.22%">1/8</span><span style="left:33.33%">1/4</span><span style="left:44.44%">1/2</span><span style="left:55.56%">1&times;</span><span style="left:66.67%">2</span><span style="left:77.78%">4</span><span style="left:88.89%">8</span><span style="left:100.00%">16</span></div>
+    <div class="bar-key"><span><i style="background:var(--urgent)"></i>urgent, above the line</span><span><i class="hollow"></i>not urgent, below</span></div>
+    <p class="cap">One dot per test message, placed by its score: the highest can&rsquo;t-miss probability as a multiple of that timeline&rsquo;s threshold, on a log scale. The two groups barely overlap, so the ranking is good. But half the urgent messages sit left of 1&times;, the frozen cutoff, where nothing escalates.</p>
+  </figure>
+  <div class="col">
+    <p>No other cutoff fixes that. Recall is the share of urgent messages escalated; precision is the share of escalated messages that were urgent. Lowering the cutoff until recall matches the urgency screen&rsquo;s drops precision to 86% on dev, 73% on val and 84% on test, even with an ideal cutoff, tuned on each set&rsquo;s own answers. The screen keeps it at 97%, 85% and 93%.</p>
+  </div>
+  <figure class="viz tr-fig hov">
+    <p class="hint"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5v11l3-2.6 2 4.6 2-.9-2-4.5h4z"/></svg>Hover or tap the line to read any cutoff</p>
+    <svg class="tr" viewBox="0 0 462 260" role="img" aria-label="Precision against recall on the test set for every possible cutoff. The urgency screen sits above the whole curve: at the same 97% recall its precision is 93%, against 84% for the ideal cutoff.">
+      <g class="tp-grid"><line x1="76" x2="358" y1="218.0" y2="218.0" class="base"/><text x="70" y="222.0" text-anchor="end">60%</text><line x1="76" x2="358" y1="167.0" y2="167.0"/><text x="70" y="171.0" text-anchor="end">70%</text><line x1="76" x2="358" y1="116.0" y2="116.0"/><text x="70" y="120.0" text-anchor="end">80%</text><line x1="76" x2="358" y1="65.0" y2="65.0"/><text x="70" y="69.0" text-anchor="end">90%</text><line x1="76" x2="358" y1="14.0" y2="14.0"/><text x="70" y="18.0" text-anchor="end">100%</text><text x="76.0" y="234" text-anchor="middle">0%</text><text x="146.5" y="234" text-anchor="middle">25%</text><text x="217.0" y="234" text-anchor="middle">50%</text><text x="287.5" y="234" text-anchor="middle">75%</text><text x="358.0" y="234" text-anchor="middle">100%</text><text class="ax" x="217" y="256" text-anchor="middle">Recall: urgent messages escalated</text><text class="ax" transform="translate(12 116) rotate(-90)" text-anchor="middle">Precision:<tspan x="0" dy="14">escalations that were urgent</tspan></text></g>
+      <polyline class="tr-curve" points="84.1,14.0 92.1,14.0 100.2,14.0 112.3,14.0 120.3,14.0 136.4,14.0 140.5,14.0 144.5,14.0 148.5,14.0 160.6,14.0 176.7,14.0 184.8,14.0 188.8,14.0 200.9,14.0 208.9,14.0 221.0,14.0 221.0,27.8 229.1,27.1 253.3,25.3 269.4,24.4 293.5,32.2 313.7,38.7 329.8,77.8 333.8,76.9 337.9,87.8 349.9,95.9 349.9,120.7 349.9,134.3 354.0,137.3 354.0,141.5 354.0,145.6 354.0,153.6 358.0,163.4 358.0,167.0"/>
+      <g><circle class="tr-hit" cx="84.1" cy="14.0" r="2.6" data-tip-h="Cutoff 12&times;" data-tip="Recall 3% (2 of 70) &middot; precision 100% (2 of 2)"/><circle class="tr-hit" cx="92.1" cy="14.0" r="2.6" data-tip-h="Cutoff 11&times;" data-tip="Recall 6% (4 of 70) &middot; precision 100% (4 of 4)"/><circle class="tr-hit" cx="100.2" cy="14.0" r="2.6" data-tip-h="Cutoff 10&times;" data-tip="Recall 9% (6 of 70) &middot; precision 100% (6 of 6)"/><circle class="tr-hit" cx="112.3" cy="14.0" r="2.6" data-tip-h="Cutoff 8&times;" data-tip="Recall 13% (9 of 70) &middot; precision 100% (9 of 9)"/><circle class="tr-hit" cx="120.3" cy="14.0" r="2.6" data-tip-h="Cutoff 7&times;" data-tip="Recall 16% (11 of 70) &middot; precision 100% (11 of 11)"/><circle class="tr-hit" cx="136.4" cy="14.0" r="2.6" data-tip-h="Cutoff 6&times;" data-tip="Recall 21% (15 of 70) &middot; precision 100% (15 of 15)"/><circle class="tr-hit" cx="140.5" cy="14.0" r="2.6" data-tip-h="Cutoff 3.75&times;" data-tip="Recall 23% (16 of 70) &middot; precision 100% (16 of 16)"/><circle class="tr-hit" cx="144.5" cy="14.0" r="2.6" data-tip-h="Cutoff 3&times;" data-tip="Recall 24% (17 of 70) &middot; precision 100% (17 of 17)"/><circle class="tr-hit" cx="148.5" cy="14.0" r="2.6" data-tip-h="Cutoff 2.4&times;" data-tip="Recall 26% (18 of 70) &middot; precision 100% (18 of 18)"/><circle class="tr-hit" cx="160.6" cy="14.0" r="2.6" data-tip-h="Cutoff 2&times;" data-tip="Recall 30% (21 of 70) &middot; precision 100% (21 of 21)"/><circle class="tr-hit" cx="176.7" cy="14.0" r="2.6" data-tip-h="Cutoff 1.5&times;" data-tip="Recall 36% (25 of 70) &middot; precision 100% (25 of 25)"/><circle class="tr-hit" cx="184.8" cy="14.0" r="2.6" data-tip-h="Cutoff 1.4&times;" data-tip="Recall 39% (27 of 70) &middot; precision 100% (27 of 27)"/><circle class="tr-hit" cx="188.8" cy="14.0" r="2.6" data-tip-h="Cutoff 1.3&times;" data-tip="Recall 40% (28 of 70) &middot; precision 100% (28 of 28)"/><circle class="tr-hit" cx="200.9" cy="14.0" r="2.6" data-tip-h="Cutoff 1.25&times;" data-tip="Recall 44% (31 of 70) &middot; precision 100% (31 of 31)"/><circle class="tr-hit" cx="208.9" cy="14.0" r="2.6" data-tip-h="Cutoff 1.2&times;" data-tip="Recall 47% (33 of 70) &middot; precision 100% (33 of 33)"/><circle class="tr-hit" cx="221.0" cy="14.0" r="2.6" data-tip-h="Cutoff 1.1&times;" data-tip="Recall 51% (36 of 70) &middot; precision 100% (36 of 36)"/><circle class="tr-hit" cx="221.0" cy="27.8" r="2.6" data-tip-h="Cutoff 1&times;" data-tip="Recall 51% (36 of 70) &middot; precision 97% (36 of 37)"/><circle class="tr-hit" cx="229.1" cy="27.1" r="2.6" data-tip-h="Cutoff 0.9&times;" data-tip="Recall 54% (38 of 70) &middot; precision 97% (38 of 39)"/><circle class="tr-hit" cx="253.3" cy="25.3" r="2.6" data-tip-h="Cutoff 0.8&times;" data-tip="Recall 63% (44 of 70) &middot; precision 98% (44 of 45)"/><circle class="tr-hit" cx="269.4" cy="24.4" r="2.6" data-tip-h="Cutoff 0.75&times;" data-tip="Recall 69% (48 of 70) &middot; precision 98% (48 of 49)"/><circle class="tr-hit" cx="293.5" cy="32.2" r="2.6" data-tip-h="Cutoff 0.6&times;" data-tip="Recall 77% (54 of 70) &middot; precision 96% (54 of 56)"/><circle class="tr-hit" cx="313.7" cy="38.7" r="2.6" data-tip-h="Cutoff 0.5&times;" data-tip="Recall 84% (59 of 70) &middot; precision 95% (59 of 62)"/><circle class="tr-hit" cx="329.8" cy="77.8" r="2.6" data-tip-h="Cutoff 0.4&times;" data-tip="Recall 90% (63 of 70) &middot; precision 88% (63 of 72)"/><circle class="tr-hit" cx="333.8" cy="76.9" r="2.6" data-tip-h="Cutoff 0.35&times;" data-tip="Recall 91% (64 of 70) &middot; precision 88% (64 of 73)"/><circle class="tr-hit" cx="337.9" cy="87.8" r="2.6" data-tip-h="Cutoff 0.3&times;" data-tip="Recall 93% (65 of 70) &middot; precision 86% (65 of 76)"/><circle class="tr-hit" cx="349.9" cy="95.9" r="2.6" data-tip-h="Cutoff 0.24&times;" data-tip="Recall 97% (68 of 70) &middot; precision 84% (68 of 81)"/><circle class="tr-hit" cx="349.9" cy="120.7" r="2.6" data-tip-h="Cutoff 0.2&times;" data-tip="Recall 97% (68 of 70) &middot; precision 79% (68 of 86)"/><circle class="tr-hit" cx="349.9" cy="134.3" r="2.6" data-tip-h="Cutoff 0.16&times;" data-tip="Recall 97% (68 of 70) &middot; precision 76% (68 of 89)"/><circle class="tr-hit" cx="354.0" cy="137.3" r="2.6" data-tip-h="Cutoff 0.15&times;" data-tip="Recall 99% (69 of 70) &middot; precision 76% (69 of 91)"/><circle class="tr-hit" cx="354.0" cy="141.5" r="2.6" data-tip-h="Cutoff 0.14&times;" data-tip="Recall 99% (69 of 70) &middot; precision 75% (69 of 92)"/><circle class="tr-hit" cx="354.0" cy="145.6" r="2.6" data-tip-h="Cutoff 0.12&times;" data-tip="Recall 99% (69 of 70) &middot; precision 74% (69 of 93)"/><circle class="tr-hit" cx="354.0" cy="153.6" r="2.6" data-tip-h="Cutoff 0.1&times;" data-tip="Recall 99% (69 of 70) &middot; precision 73% (69 of 95)"/><circle class="tr-hit" cx="358.0" cy="163.4" r="2.6" data-tip-h="Cutoff 0.08&times;" data-tip="Recall 100% (70 of 70) &middot; precision 71% (70 of 99)"/><circle class="tr-hit" cx="358.0" cy="167.0" r="2.6" data-tip-h="Cutoff 0.04&times;" data-tip="Recall 100% (70 of 70) &middot; precision 70% (70 of 100)"/></g>
+      <g class="tr-pt base"><circle cx="221.0" cy="27.8" r="5.5" tabindex="0" data-tip-h="Frozen cutoff" data-tip="Recall 51% (36 of 70) &middot; precision 97% (36 of 37)"/><text x="221.0" y="47.8" text-anchor="middle">frozen cutoff</text></g>
+      <g class="tr-pt base"><circle cx="349.9" cy="95.9" r="5.5" tabindex="0" data-tip-h="Ideal cutoff, tuned on answers" data-tip="Recall 97% (68 of 70) &middot; precision 84% (68 of 81)"/><text x="359.9" y="99.9" text-anchor="start">ideal cutoff,<tspan x="359.9" dy="14">tuned on answers</tspan></text></g>
+      <g class="tr-pt screen"><circle cx="349.9" cy="48.9" r="5.5" tabindex="0" data-tip-h="Urgency screen" data-tip="Recall 97% (68 of 70) &middot; precision 93% (68 of 73)"/><text x="359.9" y="52.9" text-anchor="start">urgency screen</text></g>
+    </svg>
+    <p class="cap">The line is the baseline on the test set at every possible cutoff; up and to the right is better. Every point on it trades recall for precision, and none reaches the urgency screen, which matches the ideal cutoff&rsquo;s recall at higher precision.</p>
+  </figure>
+  <div class="tw">
+    <table>
+      <thead><tr><th></th><th>Dev</th><th>Val</th><th>Test</th></tr></thead>
+      <tbody>
+        <tr><td>Ranking (AUROC)</td><td>0.95</td><td>0.90</td><td>0.92</td></tr>
+        <tr><td>Recall, frozen thresholds</td><td class="hit">50%<span class="metric">43 of 86 urgent</span></td><td class="hit">69%<span class="metric">25 of 36 urgent</span></td><td class="hit">51%<span class="metric">36 of 70 urgent</span></td></tr>
+        <tr><td>Precision, ideal cutoff tuned on answers</td><td>86%<span class="metric">84 of 98 escalated</span></td><td>73%<span class="metric">36 of 49 escalated</span></td><td>84%<span class="metric">68 of 81 escalated</span></td></tr>
+        <tr class="ship"><td>Precision, urgency screen</td><td>97%<span class="metric">83 of 86 escalated</span></td><td>85%<span class="metric">34 of 40 escalated</span></td><td>93%<span class="metric">68 of 73 escalated</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col fine">The ideal cutoff is tuned on each set&rsquo;s own answers. It is the cutoff with the highest precision whose recall is at least the screen&rsquo;s: 97% on dev, 94% on val and 97% on test. A cutoff here scales all three thresholds together. Every number comes from the baseline&rsquo;s cached calls, with no new model calls, scored against the physician&rsquo;s labels on the same sets as the rest of this page.</p>
 </section>
 
 <section id="development">
@@ -591,13 +676,14 @@
     <table>
       <thead><tr><th></th><th>Result</th><th>Rate</th><th>95% interval</th></tr></thead>
       <tbody>
-        <tr><td>Urgent messages missed</td><td>2 of 70</td><td>3%</td><td>1% to 10%</td></tr>
-        <tr><td>Non-urgent messages escalated</td><td>5 of 30</td><td>17%</td><td>7% to 34%</td></tr>
-        <tr><td>Agreement with the physician</td><td>87 of 100</td><td>87%</td><td>79% to 92%</td></tr>
+        <tr><td>Urgent messages missed<span class="metric">1 &minus; recall; recall is 97%</span></td><td>2 of 70</td><td>3%</td><td>1% to 10%</td></tr>
+        <tr><td>Escalations that were urgent<span class="metric">Precision</span></td><td>68 of 73</td><td>93%</td><td>85% to 97%</td></tr>
+        <tr><td>Non-urgent messages escalated<span class="metric">False positive rate</span></td><td>5 of 30</td><td>17%</td><td>7% to 34%</td></tr>
+        <tr><td>Agreement with the physician<span class="metric">Accuracy, across all three routes</span></td><td>87 of 100</td><td>87%</td><td>79% to 92%</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="col fine">Intervals are Wilson 95%.</p>
+  <p class="col fine">Urgent escalation is the positive class. Intervals are Wilson 95%.</p>
 
   <div class="two">
     <div>
@@ -982,6 +1068,42 @@
   pick();
   window.addEventListener("scroll", onScroll, { passive: true });
   window.addEventListener("resize", onScroll);
+})();
+</script>
+<script>
+(function () {
+  // hover / tap readouts for the threshold charts: one tooltip per figure, filled from data-tip
+  document.querySelectorAll(".hov").forEach(function (fig) {
+    var tip = document.createElement("div"), cur = null;
+    tip.className = "tip";
+    tip.setAttribute("role", "status");
+    fig.appendChild(tip);
+
+    function show(el) {
+      if (cur) cur.classList.remove("on");
+      cur = el;
+      el.classList.add("on");
+      tip.innerHTML = "<b>" + el.getAttribute("data-tip-h") + "</b>" + el.getAttribute("data-tip");
+      tip.classList.add("show");
+      var f = fig.getBoundingClientRect(), r = el.getBoundingClientRect(), half = tip.offsetWidth / 2;
+      var x = Math.max(half, Math.min(f.width - half, r.left + r.width / 2 - f.left));
+      tip.style.left = x + "px";
+      tip.style.top = (r.top - f.top) + "px";
+    }
+    function hide() {
+      if (cur) cur.classList.remove("on");
+      cur = null;
+      tip.classList.remove("show");
+    }
+    function target(e) { return e.target.closest ? e.target.closest("[data-tip]") : null; }
+
+    fig.addEventListener("pointerover", function (e) { var t = target(e); if (t) show(t); });
+    // a tap fires pointerout straight after; keep the readout until the next tap elsewhere
+    fig.addEventListener("pointerout", function (e) { if (e.pointerType !== "touch" && target(e)) hide(); });
+    fig.addEventListener("focusin", function (e) { var t = target(e); if (t) show(t); });
+    fig.addEventListener("focusout", hide);
+    document.addEventListener("pointerdown", function (e) { if (!fig.contains(e.target) || !target(e)) hide(); });
+  });
 })();
 </script>
 </body>

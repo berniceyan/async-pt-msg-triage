@@ -25,7 +25,6 @@ scored once, with the prompt frozen.
 | test set, 100 messages | urgent missed | non-urgent escalated | agreement |
 |---|---|---|---|
 | **LLM urgency screen, unsure → urgent** | **2/70 (3%, 1–10)** | **5/30 (17%, 7–34)** | **87/100** |
-| LLM urgency screen, unsure → queue | 14/70 (20%) | 3/30 (10%) | 76/100 |
 | Judgment only (baseline), no screen | 34/70 (49%) | 1/30 (3%) | 56/100 |
 
 Intervals are Wilson 95%.
