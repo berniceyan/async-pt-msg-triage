@@ -150,3 +150,8 @@ only. The labels are not PMR-Bench's:
   levels are reported alongside.
 - Val and test are subsets drawn from PMR's training split (`tools/split_extended.py`), sampled
   to include more urgent messages than the benchmark's natural mix.
+
+## License
+
+The code and prompts are MIT-licensed (`LICENSE`). PMR-Bench messages are not covered by it: they
+remain under CC BY-NC 4.0 and Reddit's data policy, as above.
