@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient messages, triaged by an agent · async-pt-msg-triage</title>
+<meta name="description" content="An LLM triage agent for asynchronous patient messages that asks one question first: can this safely wait three days for a physician? On a held-out test set it misses 2 of 70 urgent messages.">
+<meta property="og:title" content="Patient messages, triaged by an agent">
+<meta property="og:description" content="An LLM agent asks every patient-portal message whether it can safely wait three days. On a held-out test set it misses 2 of 70 urgent messages.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;600&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,500;0,700;0,800;1,400&display=swap">
+<style>
+  :root{
+    --paper:#edf1ee;  --sheet:#f7f9f7;  --ink:#18262a;  --ink-2:#4d5e62;  --ink-3:#7c8b8e;
+    --line:#cfd8d4;   --line-2:#b4c1bc;
+    --urgent:#b42318; --queue:#2d5b8c;  --self:#3b7a55;
+    --urgent-wash:#f6e3e0; --queue-wash:#e2eaf3; --self-wash:#e2eee6;
+    --focus:#2d5b8c;
+    --sans:"Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:"Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#0f1a1c; --sheet:#152326; --ink:#e3ebe8; --ink-2:#a9b8b5; --ink-3:#7a8b88;
+      --line:#26383b;  --line-2:#35494c;
+      --urgent:#f0806f; --queue:#86a9d6; --self:#7cc29a;
+      --urgent-wash:#35201d; --queue-wash:#1c2a3a; --self-wash:#1b2e24;
+      --focus:#86a9d6;
+      color-scheme:dark;
+    }
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0; background:var(--paper); color:var(--ink); font:400 18px/1.6 var(--sans)}
+  a{color:inherit; text-decoration-color:var(--line-2); text-decoration-thickness:1.5px; text-underline-offset:3px}
+  a:hover{text-decoration-color:currentColor}
+  :focus-visible{outline:2.5px solid var(--focus); outline-offset:3px; border-radius:3px}
+
+  .page{max-width:1080px; margin:0 auto; padding:0 28px}
+  .col{max-width:680px}
+
+  /* ---------- masthead ---------- */
+  .mast{display:flex; justify-content:space-between; align-items:baseline; flex-wrap:nowrap; gap:8px 28px;
+    padding:22px 0 0; font-size:15px}
+  .mast .me{font-weight:700; white-space:nowrap}
+  .mast .me span{font-weight:400; color:var(--ink-2); margin-left:10px}
+  .mast nav{display:flex; gap:20px; flex-wrap:nowrap; white-space:nowrap}
+  .mast nav a{text-decoration:none; color:var(--ink-2)}
+  .mast nav a:hover{color:var(--ink)}
+
+  /* ---------- hero ---------- */
+  .hero{padding:72px 0 0; text-align:center}
+  h1{
+    font-weight:800; font-size:clamp(36px, 5.6vw, 68px); line-height:1; letter-spacing:-.03em;
+    margin:0 auto; max-width:14ch; text-wrap:balance;
+  }
+  .hero .dek{font-size:clamp(19px,2.2vw,22px); line-height:1.5; color:var(--ink-2); margin:28px auto 0; max-width:40ch}
+
+  /* the three destinations, named before the chart that uses their colours */
+  .routes{max-width:60ch; margin:30px auto 0; text-align:center; font-size:17px; line-height:1.6; color:var(--ink-2); text-wrap:pretty}
+  .routes b{font-weight:700} .routes .u{color:var(--urgent)} .routes .q{color:var(--queue)} .routes .s{color:var(--self)}
+
+  /* ---------- the sorter ---------- */
+  .sorter{margin:56px 0 0; padding:26px 28px 24px; background:var(--sheet); border:1px solid var(--line); border-radius:14px}
+  .sorter-top{display:flex; justify-content:center; text-align:center; align-items:flex-end; flex-wrap:wrap; gap:16px 24px; margin:0 0 22px}
+  .sorter-top p{margin:0; font-size:15.5px; color:var(--ink-2); max-width:60ch; line-height:1.5}
+
+  .lanes{display:grid; grid-template-columns:repeat(3,1fr); gap:20px}
+  .lane-head{padding:0 0 10px; border-bottom:2px solid currentColor; margin:0 0 12px; text-align:center}
+  .lane-head b{display:block; font-size:16px; font-weight:700}
+  .lane.u .lane-head{color:var(--urgent)} .lane.q .lane-head{color:var(--queue)} .lane.s .lane-head{color:var(--self)}
+  .lane-head span{display:block; font-size:13.5px; line-height:1.4; color:var(--ink-2); margin-top:2px}
+  .field{position:relative}
+  .m{
+    position:absolute; left:0; top:0; border-radius:2.5px;
+    transition:transform .9s cubic-bezier(.2,.8,.2,1);
+  }
+  .m.u{background:var(--urgent)} .m.q{background:var(--queue)} .m.s{background:var(--self)}
+  /* A square outside its own lane: the system disagreed with the label. */
+  .m.off{box-shadow:0 0 0 1.5px var(--sheet), 0 0 0 3px currentColor}
+  .m.u.off{color:var(--urgent)} .m.q.off{color:var(--queue)} .m.s.off{color:var(--self)}
+
+  .readout{display:flex; flex-wrap:wrap; justify-content:center; text-align:center; gap:10px 56px; margin:22px 0 0; padding:16px 0 0; border-top:1px solid var(--line)}
+  .readout div{font-size:15px; color:var(--ink-2)}
+  .readout b{display:block; font-size:30px; font-weight:800; letter-spacing:-.02em; color:var(--ink); font-variant-numeric:tabular-nums; line-height:1.1}
+  .readout .miss b{color:var(--urgent)}
+  .legend{margin:14px 0 0; font-size:14px; color:var(--ink-3); text-align:center}
+
+  @media (max-width:700px){
+    .page{padding:0 18px}
+    .sorter{padding:20px 16px; margin-left:-6px; margin-right:-6px}
+    .mast .me span{display:none}
+    .mast nav{gap:6px 16px}
+  }
+
+  /* ---------- body ---------- */
+  section{padding:88px 0 0}
+  h2{font-weight:800; font-size:clamp(30px,4.4vw,44px); line-height:1.05; letter-spacing:-.025em; margin:0 0 22px; max-width:18ch; text-wrap:balance}
+  h3{font-weight:700; font-size:21px; line-height:1.3; margin:36px 0 8px}
+  p{margin:0 0 18px}
+  .lead{font-size:21px; line-height:1.55}
+  ul{margin:0 0 18px; padding-left:1.1em}
+  li{margin:0 0 10px}
+  li::marker{color:var(--ink-3)}
+  code{font:400 .86em var(--mono); background:var(--sheet); border:1px solid var(--line); border-radius:4px; padding:.08em .35em}
+
+  .tok{font:600 14px/1 var(--mono); padding:5px 8px; border-radius:5px; white-space:nowrap}
+  .tok.sw{background:var(--self-wash); color:var(--self)}
+  .tok.un, .tok.ns{background:var(--urgent-wash); color:var(--urgent)}
+  .toks{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px}
+
+  .rules{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:26px 40px; margin:28px 0 0; max-width:880px}
+  .rules div{border-top:2px solid var(--ink); padding-top:12px}
+  .rules b{display:block; font-size:18px; margin-bottom:4px}
+  .rules p{margin:0; color:var(--ink-2); font-size:16.5px}
+  @media (max-width:700px){ .rules{grid-template-columns:1fr} }
+
+  .tw{overflow-x:auto; margin:24px 0 10px; max-width:760px}
+  table{border-collapse:collapse; width:100%; font-size:16px; font-variant-numeric:tabular-nums}
+  th{text-align:left; font-weight:500; color:var(--ink-2); font-size:14.5px; padding:0 18px 10px 0; border-bottom:2px solid var(--ink); white-space:nowrap}
+  td{padding:11px 18px 11px 0; border-bottom:1px solid var(--line); white-space:nowrap}
+  th:last-child, td:last-child{padding-right:0}
+  tr.ship td{font-weight:700}
+  td.hit{color:var(--urgent); font-weight:700}
+  .fine{font-size:15.5px; color:var(--ink-2)}
+
+  .two{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:40px; max-width:960px}
+  .two > div{min-width:0}
+  @media (max-width:760px){ .two{grid-template-columns:1fr; gap:0} }
+
+  .miss-card{border-left:4px solid var(--urgent); padding:2px 0 2px 20px; margin:0 0 24px}
+  .miss-card b{display:block; font-size:18px}
+  .miss-card p{margin:4px 0 0; color:var(--ink-2)}
+  .aside{background:var(--sheet); border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin:28px 0 0; max-width:760px}
+  .aside p{margin:0}
+
+
+  /* ---------- visuals ---------- */
+  .viz{margin:30px 0 8px; max-width:880px}
+  .cap{font-size:14.5px; line-height:1.5; color:var(--ink-3); margin:12px 0 0; max-width:64ch}
+
+  /* the route, drawn: message -> screen -> urgent, or on to judgment -> queue or self-care */
+  .flow{display:grid; grid-template-columns:minmax(0,1fr) 34px minmax(0,1.25fr) 34px minmax(0,1fr); grid-template-rows:auto 46px auto 46px auto; align-items:center}
+  .node{border:1.5px solid var(--line-2); border-radius:10px; padding:12px 14px; background:var(--sheet); font-size:15px; line-height:1.4; color:var(--ink-2)}
+  .node b{display:block; color:var(--ink); font-size:16px; margin-bottom:2px}
+  .node .n{font-weight:800; color:var(--ink-3); margin-right:6px}
+  .node.stage{border-color:var(--ink)}
+  .node.dest{border-width:0; border-left:5px solid; border-radius:4px}
+  .node.dest.u{border-color:var(--urgent); background:var(--urgent-wash)} .node.dest.u b{color:var(--urgent)}
+  .node.dest.q{border-color:var(--queue);  background:var(--queue-wash)}  .node.dest.q b{color:var(--queue)}
+  .node.dest.s{border-color:var(--self);   background:var(--self-wash)}   .node.dest.s b{color:var(--self)}
+  .node.msg{border-style:dashed}
+  .h-arrow{height:2px; background:var(--ink-2); position:relative}
+  .h-arrow::after{content:""; position:absolute; right:-1px; top:-4px; border:5px solid transparent; border-left:7px solid var(--ink-2); border-right:0}
+  .v-arrow{justify-self:center; width:2px; height:100%; background:var(--ink-2); position:relative}
+  .v-arrow::after{content:""; position:absolute; bottom:-1px; left:-4px; border:5px solid transparent; border-top:7px solid var(--ink-2); border-bottom:0}
+  .v-arrow span, .h-label{position:absolute; white-space:nowrap; font-size:13.5px; color:var(--ink-2)}
+  .v-arrow span{left:12px; top:50%; transform:translateY(-50%)}
+  .h-wrap{position:relative; display:flex; flex-direction:column; justify-content:center; height:100%}
+  .h-label{bottom:calc(50% + 6px); left:50%; transform:translateX(-50%); text-align:center}
+  .flow .toks{margin-top:8px}
+  /* On a phone the main path runs down a left spine (message, screen, judgment,
+     self-care) and the two other outcomes branch off it, indented. */
+  @media (max-width:700px){
+    .flow{grid-template-columns:1fr; grid-template-rows:none; gap:0}
+    .flow > *{grid-column:1 !important; grid-row:auto !important}
+    .h-wrap{display:none}
+    .v-arrow{justify-self:start; margin-left:26px; height:34px}
+    .node.dest.u, .node.dest.q{margin:0 0 0 52px; padding-top:12px; position:relative}
+    .node.dest.u::after, .node.dest.q::after{content:""; position:absolute; left:-27px; top:0; bottom:0; width:2px; background:var(--ink-2)}
+    .node.msg{position:relative; margin-bottom:34px}
+    .node.msg::after{content:""; position:absolute; left:25px; top:calc(100% + 1.5px); width:2px; height:32px;
+      background:linear-gradient(var(--ink-2),var(--ink-2)) no-repeat top/2px calc(100% - 6px)}
+    .node.msg::before{content:""; position:absolute; left:21px; top:calc(100% + 27px); border:5px solid transparent; border-top:7px solid var(--ink-2); border-bottom:0}
+    .node.dest.u::before, .node.dest.q::before{content:""; position:absolute; left:-27px; top:-8px; width:22px; height:calc(50% + 8px);
+      border-left:2px solid var(--ink-2); border-bottom:2px solid var(--ink-2); border-bottom-left-radius:6px}
+  }
+
+  /* what each screen answer turned out to be */
+  .bars{display:grid; gap:14px}
+  .bar-row{display:grid; grid-template-columns:118px minmax(0,1fr); gap:14px; align-items:center}
+  .bar-row code{justify-self:start}
+  .track{display:flex; height:30px; border-radius:5px; overflow:hidden}
+  .track i{display:flex; align-items:center; padding:0 8px; font:700 13.5px/1 var(--sans); font-style:normal; color:#fff; white-space:nowrap; min-width:0}
+  .track .yes{background:var(--urgent)}
+  .track .no{background:var(--line-2); color:var(--ink)}
+  .bar-key{display:flex; gap:18px; font-size:14px; color:var(--ink-2); margin-top:12px}
+  .bar-key i{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px}
+
+  /* rates with their intervals, on every set */
+  .ci{display:grid; grid-template-columns:44px 132px minmax(0,1fr); gap:6px 12px; align-items:center}
+  .ci .num{font-size:13.5px; color:var(--ink-2); white-space:nowrap; font-variant-numeric:tabular-nums}
+  .ci .set{font-weight:700; font-size:15px; grid-row:span 2; align-self:center}
+  .ci .lane-line{position:relative; height:20px; margin-right:14px}
+  .ci .lane-line::before{content:""; position:absolute; left:0; right:0; top:50%; height:1px; background:var(--line)}
+  .ci .w{position:absolute; top:50%; height:2px; transform:translateY(-50%)}
+  .ci .d{position:absolute; top:50%; width:12px; height:12px; border-radius:50%; transform:translate(-50%,-50%)}
+  .ci .miss .w, .ci .miss .d{background:var(--urgent)}
+  .ci .esc .w, .ci .esc .d{background:var(--ink)}
+    .ci .gapr{grid-column:1 / -1; height:8px}
+  .axis{position:relative; height:22px; margin-left:200px; margin-right:14px; border-top:1px solid var(--ink-3); margin-top:6px}
+  .axis span{position:absolute; top:4px; transform:translateX(-50%); font-size:12.5px; color:var(--ink-3)}
+
+  /* seconds to a decision */
+  .clock{position:relative; padding-top:8px}
+  .clock .row{display:grid; grid-template-columns:150px minmax(0,1fr); gap:14px; align-items:center; margin:0 0 10px}
+  .clock .row b{font-size:15px; font-weight:700}
+  .clock .row small{display:block; font-size:13px; color:var(--ink-2); font-weight:400}
+  .clock .bar{position:relative; height:26px}
+  .clock .seg-b{position:absolute; top:0; bottom:0; border-radius:4px; display:flex; align-items:center; padding:0 8px; font-size:13px; font-weight:700; white-space:nowrap}
+  .clock .screen{background:var(--ink); color:var(--sheet)}
+  .clock .judge{background:var(--line-2); color:var(--ink)}
+  .clock .done{position:absolute; top:-4px; bottom:-4px; width:3px; border-radius:2px}
+  .clock .done.u{background:var(--urgent)} .clock .done.q{background:var(--queue)}
+  .clock .axis{margin-left:164px; margin-right:14px}
+
+  /* label against route: every disagreement in one grid */
+  .cm{display:grid; grid-template-columns:110px repeat(3, minmax(0,1fr)); gap:4px; max-width:560px; font-variant-numeric:tabular-nums}
+  .cm .h{font-size:13.5px; color:var(--ink-2); display:flex; align-items:flex-end; padding:0 4px 6px}
+  .cm .r{font-size:14.5px; font-weight:700; display:flex; align-items:center}
+  .cm .c{height:62px; border-radius:6px; display:grid; place-items:center; font-size:22px; font-weight:800; border:1.5px dashed var(--line); color:var(--ink-3)}
+  .cm .c.hit{border:0}
+  .cm .c.hit.u{background:var(--urgent-wash); color:var(--urgent)} .cm .c.hit.q{background:var(--queue-wash); color:var(--queue)} .cm .c.hit.s{background:var(--self-wash); color:var(--self)}
+  .cm .c.err{border:2px solid var(--ink-2); color:var(--ink)}
+  .cm .c.err.bad{border-color:var(--urgent); color:var(--urgent)}
+  .cm .r.u{color:var(--urgent)} .cm .r.q{color:var(--queue)} .cm .r.s{color:var(--self)}
+  .cm-axes{display:flex; justify-content:space-between; max-width:560px; font-size:13px; color:var(--ink-3); margin-top:8px}
+
+  .errs{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:30px 40px; margin:34px 0 0; max-width:880px}
+  .err{min-width:0}
+  .route{display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13.5px; font-weight:700; margin:0 0 8px}
+  .route span{padding:4px 8px; border-radius:4px}
+  .route .u{background:var(--urgent-wash); color:var(--urgent)} .route .q{background:var(--queue-wash); color:var(--queue)} .route .s{background:var(--self-wash); color:var(--self)}
+  .route em{font-style:normal; font-weight:400; color:var(--ink-3)}
+  .err b{display:block; font-size:18px; line-height:1.35}
+  .err p{margin:6px 0 0; color:var(--ink-2); font-size:16.5px}
+  .err blockquote{margin:10px 0 0; padding:10px 14px; background:var(--sheet); border-radius:8px; font-size:15.5px; color:var(--ink)}
+  @media (max-width:700px){ .errs{grid-template-columns:1fr} }
+
+  /* adversarial properties: two cases each */
+  .props{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:0 40px; max-width:760px; margin:24px 0 0}
+  .prop{display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid var(--line); font-size:15.5px}
+  .prop .dots{display:flex; gap:6px; flex:none}
+  .prop .dots i{width:13px; height:13px; border-radius:50%; background:var(--ink)}
+  .prop .dots i.no{background:none; box-shadow:inset 0 0 0 2.5px var(--urgent)}
+  .prop.fail{color:var(--urgent)}
+  @media (max-width:640px){ .props{grid-template-columns:1fr} }
+
+  .line{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:20px; max-width:880px; margin:20px 0 22px; align-items:start}
+  .line-col{border-radius:10px; padding:16px 20px 6px; border-left:5px solid}
+  .line-col.u{background:var(--urgent-wash); border-color:var(--urgent)} .line-col.u b{color:var(--urgent)}
+  .line-col.s{background:var(--self-wash); border-color:var(--self)} .line-col.s b{color:var(--self)}
+  .line-col b{display:block; font-size:17px; margin-bottom:8px}
+  .line-col ul{margin:0 0 10px; font-size:16.5px}
+  .line-col li{margin:0 0 8px}
+  @media (max-width:700px){ .line{grid-template-columns:1fr} }
+
+  /* development rounds: a real sequence, so numbered */
+  .rounds{list-style:none; counter-reset:r; margin:26px 0 0; padding:0; max-width:760px}
+  .rounds li{counter-increment:r; position:relative; padding:0 0 22px 56px; margin:0}
+  .rounds li::before{content:counter(r); position:absolute; left:0; top:0; width:36px; height:36px; border-radius:50%;
+    display:grid; place-items:center; font-weight:800; font-size:17px; border:2px solid var(--ink); background:var(--paper); z-index:1}
+  .rounds li:not(:last-child)::after{content:""; position:absolute; left:17px; top:36px; bottom:0; width:2px; background:var(--line-2)}
+  .rounds li b{display:block; font-size:18px; padding-top:5px}
+  .rounds li p{margin:4px 0 0; color:var(--ink-2); font-size:16.5px}
+
+  /* each result as a share of the limit it had to meet */
+  .gauges{display:grid; gap:10px; max-width:760px}
+  .g-set{font-weight:800; font-size:16px; margin-top:8px}
+  .gauge{display:grid; grid-template-columns:230px minmax(0,1fr) 150px; gap:14px; align-items:center}
+  .g-name{font-size:15px; color:var(--ink-2)}
+  .g-track{position:relative; height:14px; background:var(--line); border-radius:3px; margin-right:6px}
+  .g-fill{position:absolute; left:0; top:0; bottom:0; background:var(--ink); border-radius:3px}
+  .g-limit{position:absolute; right:-4px; top:-5px; bottom:-5px; width:3px; background:var(--urgent); border-radius:2px}
+  .g-val{font-size:14.5px; color:var(--ink-2); white-space:nowrap}
+  .g-val b{color:var(--ink); font-size:16px}
+  @media (max-width:640px){
+    .gauge{grid-template-columns:1fr auto; gap:4px 12px}
+    .g-name{grid-column:1 / -1}
+    .g-track{grid-column:1}
+  }
+
+  /* failure modes: one row per mode, a bar of its error count with the test set solid */
+  .fm-group{margin:0 0 22px}
+  .fm-group h4{font-size:13px; letter-spacing:.07em; text-transform:uppercase; margin:0 0 4px; padding-bottom:6px; border-bottom:2px solid currentColor}
+  .fm-group.u{--fm:var(--urgent)} .fm-group.o{--fm:var(--ink-2)} .fm-group.c{--fm:var(--queue)}
+  .fm-group h4{color:var(--fm)}
+  .fm-row{display:grid; grid-template-columns:minmax(0,1fr) 210px; gap:6px 24px; align-items:center; padding:12px 0; border-bottom:1px solid var(--line)}
+  .fm-name b{display:block; font-size:16px; line-height:1.35}
+  .fm-name span{display:block; font-size:14.5px; color:var(--ink-2); line-height:1.45; margin-top:2px}
+  .fm-bar{display:flex; align-items:center; gap:12px}
+  .fm-track{flex:1; display:flex; height:14px; border-radius:3px; background:var(--line); overflow:hidden}
+  .fm-track i{background:var(--fm)}
+  .fm-track s{background:var(--fm); opacity:.38}
+  .fm-n{font-weight:800; font-size:17px; font-variant-numeric:tabular-nums; min-width:68px}
+  .fm-n small{display:block; font-weight:400; font-size:12.5px; color:var(--ink-3)}
+  @media (max-width:640px){ .fm-row{grid-template-columns:1fr} }
+
+  /* design history, told on scroll: the steps scroll past a pinned panel. Inert
+     until the script adds .on, so without it this is the plain timeline. */
+  .panel{display:none}
+  .scrolly.on{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,380px); gap:56px; max-width:960px; align-items:start}
+  .scrolly.on .panel{display:block; position:sticky; top:14vh; margin:26px 0 0; padding:22px 24px 18px;
+    background:var(--sheet); border:1px solid var(--line); border-radius:14px}
+  .scrolly.on .steps li{padding-bottom:34vh; transition:opacity .4s}
+  .scrolly.on .steps li:last-child{padding-bottom:12vh}
+  .scrolly.on .steps li:not(.active){opacity:.35}
+  .scrolly.on .steps li::before{transition:background .4s, color .4s}
+  .scrolly.on .steps li.active::before{background:var(--ink); color:var(--paper)}
+  .scrolly.on .steps p{transition:opacity .4s}
+  .scrolly.on .steps p + p{margin-top:18vh}
+  .scrolly.on .steps li.active p:not(.active){opacity:.45}
+  .p-head{display:flex; gap:12px; align-items:flex-start; margin:0 0 18px}
+  .p-num{flex:none; width:30px; height:30px; border-radius:50%; display:grid; place-items:center; font-weight:800; font-size:15px; background:var(--ink); color:var(--sheet)}
+  .p-head b{display:block; font-size:17px; line-height:1.3}
+  .p-head span:not(.p-num){display:block; font-size:13.5px; color:var(--ink-2); line-height:1.4; margin-top:2px}
+  /* the trade-off plot: one dot per design, moving as the steps scroll */
+  .tp{display:block; width:100%; height:auto; overflow:visible; font-family:var(--sans)}
+  .tp-grid line{stroke:var(--line); stroke-width:1}
+  .tp-grid line.base{stroke:var(--ink-3)}
+  .tp-grid text{fill:var(--ink-3); font-size:11px}
+  .tp-grid text.ax{fill:var(--ink-2); font-size:11.5px}
+  .tp-grid text.better{fill:var(--self); font-weight:700}
+  .tp-path{fill:none; stroke:var(--line-2); stroke-width:1.5; stroke-dasharray:4 4}
+  .tp-ghost circle{fill:var(--sheet); stroke:var(--ink-3); stroke-width:1.5}
+  .tp-ghost text{fill:var(--ink-3); font-size:11.5px}
+  .tp-ghost.now text{fill:var(--ink); font-weight:700}
+  .tp-ghost.now circle{opacity:0}
+  .tp-ghost.later{display:none}
+  .tp-dot{transition:transform .8s cubic-bezier(.2,.8,.2,1)}
+  .tp-dot circle{fill:var(--ink)}
+  .tp-dot .halo{fill:var(--ink); opacity:.14}
+  .readouts{display:flex; gap:24px; margin:10px 0 0}
+  .readouts div{font-size:13.5px; color:var(--ink-2); line-height:1.35}
+  .readouts b{display:block; font-size:24px; font-weight:800; letter-spacing:-.02em; color:var(--ink); font-variant-numeric:tabular-nums; line-height:1.15}
+  .readouts .miss b{color:var(--urgent)}
+  .panel .cap{margin:14px 0 0; font-size:13px}
+  /* On a phone the panel pins to the top of the screen and the steps scroll under it. */
+  @media (max-width:760px){
+    .scrolly.on{display:flex; flex-direction:column-reverse; gap:0}
+    .scrolly.on .panel{top:0; margin:18px -6px 0; padding:12px 14px; z-index:2; border-radius:0 0 12px 12px}
+    .scrolly.on .panel .cap{display:none}
+    .p-head{margin:0 0 6px}
+    .tp{max-height:230px}
+    .tp-grid text{font-size:13px} .tp-grid text.ax, .tp-ghost text{font-size:13.5px}
+    .readouts{margin-top:4px}
+    .readouts div{font-size:12.5px}
+    .readouts b{font-size:19px}
+    .scrolly.on .steps{margin-top:28px}
+    .scrolly.on .steps li{padding-bottom:42vh}
+    .scrolly.on .steps p + p{margin-top:30vh}
+  }
+  @media (prefers-reduced-motion: reduce){ .tp-dot, .scrolly .steps li, .scrolly .steps p{transition:none !important} }
+
+  footer{margin:110px 0 0; padding:26px 0 48px; border-top:1px solid var(--line); font-size:15px; color:var(--ink-2)}
+  footer p{margin:0 0 8px; max-width:72ch}
+  .reverse-email{direction:rtl; unicode-bidi:bidi-override}
+
+  /* On a phone the three lanes stack, so each one gets the full width and the
+     squares stay large enough to read. */
+  @media (max-width:560px){
+    .lanes{grid-template-columns:1fr; gap:22px}
+    .lane-head span{margin-top:2px}
+  }
+
+  @media (prefers-reduced-motion: reduce){ .m{transition:none !important} }
+
+  /* Every content block sits centred on the page; text inside stays left-aligned. */
+  .col, .rules, .tw, .two, .aside, .viz, .props, .line, .rounds, .errs, .gauges, .scrolly, .cm, .cm-axes, footer p{
+    margin-left:auto; margin-right:auto}
+  /* One column width, so centred blocks share a left edge. Only the side-by-side
+     layouts (.two, the design-history scroller) are wider. */
+  .col, .rules, .tw, .aside, .viz, .props, .line, .rounds, .errs, .gauges, footer p{max-width:760px}
+  /* Narrower screens: the subtitle goes first, then the nav may wrap under the name. */
+  @media (max-width:1100px){ .mast .me span{display:none} }
+  @media (max-width:820px){ .mast{flex-wrap:wrap} .mast nav{flex-wrap:wrap} }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="mast">
+  <div class="me">Bernice Yan, MD<span>Physician, clinical AI safety and evaluation</span></div>
+  <nav aria-label="Sections">
+    <a href="#how">How it decides</a>
+    <a href="#history">History</a>
+    <a href="#development">Development</a>
+    <a href="#results">Results</a>
+    <a href="#wrong">Errors</a>
+    <a href="#limits">Limits</a>
+    <a href="https://github.com/berniceyan/async-pt-msg-triage">GitHub</a>
+  </nav>
+</header>
+
+<main>
+<div class="hero">
+  <h1>Patient messages, triaged by an agent</h1>
+  <p class="dek">Before a physician sees it, an LLM agent asks one question of every patient-portal message: can this safely wait three days? On a held-out test set it sends 68 of 70 urgent messages where they need to go.</p>
+</div>
+
+<p class="routes">Every message goes to one of three places: <b class="u">urgent escalation</b> for anything that cannot safely wait three days, the <b class="q">physician queue</b>, where a doctor replies asynchronously three or more days later, or <b class="s">self-care</b>, an automated reply with guidance and warning signs to watch for that no clinician needs to read.</p>
+
+<figure class="sorter" aria-labelledby="sorter-cap">
+  <div class="sorter-top">
+    <p id="sorter-cap">Each square is one of the 100 test messages, coloured by the physician's label and placed where the system sent it. A ringed square landed somewhere the physician would not have sent it.</p>
+  </div>
+  <div class="lanes">
+    <div class="lane u"><div class="lane-head"><b>Urgent escalation</b><span id="n-u"></span></div><div class="field" id="f-u"></div></div>
+    <div class="lane q"><div class="lane-head"><b>Physician queue</b><span id="n-q"></span></div><div class="field" id="f-q"></div></div>
+    <div class="lane s"><div class="lane-head"><b>Self-care</b><span id="n-s"></span></div><div class="field" id="f-s"></div></div>
+  </div>
+  <div class="readout" aria-live="polite">
+    <div class="miss"><b id="r-miss"></b>urgent messages missed</div>
+    <div><b id="r-over"></b>non-urgent messages escalated</div>
+    <div><b id="r-agree"></b>agree with the physician</div>
+  </div>
+  <p class="legend">Urgent means it cannot safely wait three days. In the physician queue a doctor replies asynchronously, three or more days later. Self-care is automated guidance no clinician reads.</p>
+</figure>
+
+<section id="how">
+  <div class="col">
+    <h2>Ask the question that matters, first</h2>
+    <p class="lead">Triage is not a classification problem. The errors are not the same size: an urgent message left in a three-day queue is not offset by two prescription refills routed correctly.</p>
+    <p>So the agent does not start by diagnosing. It starts with the decision a portal actually has to make, asked in plain words: can this message safely wait for a physician&rsquo;s reply?</p>
+  </div>
+
+  <figure class="viz">
+    <div class="flow">
+      <div class="node msg" style="grid-column:1;grid-row:1"><b>A patient message</b>arrives in the portal</div>
+      <div class="h-wrap" style="grid-column:2;grid-row:1"><div class="h-arrow"></div></div>
+      <div class="node stage" style="grid-column:3;grid-row:1"><b><span class="n">1</span>Urgency screen</b>Can this safely wait three days for a physician?
+        <div class="toks"><span class="tok sw">safe_to_wait</span><span class="tok un">unsure</span><span class="tok ns">not_safe</span></div></div>
+      <div class="h-wrap" style="grid-column:4;grid-row:1"><div class="h-arrow"></div></div>
+      <div class="node dest u" style="grid-column:5;grid-row:1"><b>Urgent escalation</b>not_safe or unsure: told to be seen within 1 to 3 days or sooner</div>
+
+      <div class="v-arrow" style="grid-column:3;grid-row:2"><span>safe_to_wait</span></div>
+
+      <div class="node stage" style="grid-column:3;grid-row:3"><b><span class="n">2</span>Judgment</b>Only for a message that can wait. Does a clinician have to act?</div>
+      <div class="h-wrap" style="grid-column:4;grid-row:3"><div class="h-arrow"></div></div>
+      <div class="node dest q" style="grid-column:5;grid-row:3"><b>Physician queue</b>a clinician has to act; an asynchronous reply three or more days later</div>
+
+      <div class="v-arrow" style="grid-column:3;grid-row:4"><span>no clinician action</span></div>
+
+      <div class="node dest s" style="grid-column:3;grid-row:5"><b>Self-care</b>automated guidance with return precautions</div>
+    </div>
+    <p class="cap">Two model calls at most, and a fixed policy between them. The judgment is never called on a message the screen escalates.</p>
+  </figure>
+
+  <div class="rules">
+    <div><b>Nothing can lower an escalation</b><p>The judgment is never called on an escalated message, so it cannot argue one back down.</p></div>
+    <div><b>Failure fails toward safety</b><p>A screen that cannot answer escalates. A judgment that cannot answer goes to the physician queue. Neither reaches self-care.</p></div>
+    <div><b>Only one path clears a message</b><p>Safe to wait, then no clinician action. Every other combination keeps a clinician in the loop.</p></div>
+    <div><b>Unsure escalates</b><p>The system cannot ask a follow-up question, so a message that does not settle whether it can wait is treated as one that cannot.</p></div>
+  </div>
+
+  <div class="col">
+    <h3>Where the screen draws the line</h3>
+    <p>The screen&rsquo;s instructions spell out what can and cannot wait three days. The test is simple: would waiting until day four make things worse than acting on day one?</p>
+  </div>
+  <div class="line">
+    <div class="line-col u">
+      <b>Escalate now when</b>
+      <ul>
+        <li>the problem is getting worse, or is already severe</li>
+        <li>there are signs of spreading infection, heavy bleeding, trouble breathing, or new weakness or numbness</li>
+        <li>a treatment window is closing, like a wound that needs stitches</li>
+        <li>pregnancy, a recent procedure or a weak immune system makes a new symptom riskier</li>
+        <li>there are thoughts of self-harm, or a possible overdose or poisoning</li>
+      </ul>
+    </div>
+    <div class="line-col s">
+      <b>It can wait when</b>
+      <ul>
+        <li>it needs a visit, test or prescription, but won&rsquo;t be worse in three days</li>
+        <li>it has been stable or slowly changing for weeks</li>
+        <li>it is a question about results or a medication</li>
+      </ul>
+    </div>
+  </div>
+  <div class="col">
+    <p>Two extra rules stop the most common mistakes:</p>
+    <ul>
+      <li><b>Silence is not reassurance.</b> If a patient doesn&rsquo;t mention a warning sign, that doesn&rsquo;t mean it isn&rsquo;t there.</li>
+      <li><b>&ldquo;Can&rsquo;t rule it out&rdquo; is not enough to escalate.</b> Almost nothing can be ruled out from a message alone, so that by itself is no reason to answer unsure.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="history">
+  <div class="col">
+    <h2>What came before</h2>
+    <p class="lead">The LLM urgency screen is the third design. The first two each failed in a way that pointed to the next.</p>
+  </div>
+
+  <div class="scrolly" id="scrolly">
+    <ol class="rounds steps">
+      <li>
+        <b>A keyword and semantic-retrieval screen</b>
+        <p data-state="kw">A deterministic screen ahead of the model, with no LLM call. One list of guideline-cited red-flag criteria, each with the phrasings a patient might use, fed two recognizers behind negation and experiencer guards, so &ldquo;no chest pain&rdquo; or &ldquo;my dad has chest pain&rdquo; would not fire. The first was a keyword matcher that needed the literal phrase. It almost never fired, because patients rarely use the phrase on the list: 4 escalations in 362 messages, and only one of them urgent.</p>
+        <p data-state="sem">The second was semantic retrieval, which embedded each sentence with a local encoder and escalated when it came close enough to a criterion. It reached the paraphrases and caught half the urgent messages, but it could not tell a worrying sentence from one that merely sounded like one, and escalated 87 that were not urgent. It was removed.</p>
+      </li>
+      <li>
+        <b>Judgment only, with probability thresholds</b>
+        <p data-state="base">The model wrote a differential for each message, with a probability and a timeline for every diagnosis that could not be missed, and a message escalated when any probability crossed a threshold. The thresholds were tuned on a development set with only a handful of urgent messages near the line, and did not survive held-out data. The ranking held; the cutoffs did not, and half the urgent messages were missed. This design is kept in the code as the baseline.</p>
+      </li>
+      <li>
+        <b>An LLM urgency screen, asked first</b>
+        <p data-state="llm">Rather than infer urgency from probabilities, ask for it directly: can this safely wait three days? The judgment step stayed, but it now only decides between the physician queue and self-care. Urgent misses fell from 34 of 70 to 2; the price is more non-urgent messages escalated.</p>
+      </li>
+    </ol>
+
+    <figure class="panel" aria-live="polite">
+      <div class="p-head"><span class="p-num" id="p-num">1</span><div><b id="p-name"></b><span id="p-set"></span></div></div>
+      <svg class="tp" id="tp" viewBox="0 0 320 266" role="img" aria-label="Urgent messages missed against non-urgent messages escalated, one dot per design">
+        <g class="tp-grid" id="tp-grid"></g>
+        <polyline class="tp-path" id="tp-path" points=""></polyline>
+        <g id="tp-ghosts"></g>
+        <g class="tp-dot" id="tp-dot"><circle r="11" class="halo"></circle><circle r="6.5"></circle></g>
+      </svg>
+      <div class="readouts">
+        <div class="miss"><b id="l-u"></b>urgent messages missed</div>
+        <div><b id="l-o"></b>non-urgent messages escalated</div>
+      </div>
+      <p class="cap">Each dot is one design. Lower means fewer urgent messages missed; further left means fewer non-urgent messages escalated. The keyword designs are scored on PMR&rsquo;s levels, the others on the physician&rsquo;s labels.</p>
+    </figure>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Design</th><th>Urgent missed</th><th>Non-urgent escalated</th><th>Scored on</th></tr></thead>
+      <tbody>
+        <tr><td>Judgment only (baseline)</td><td class="hit">34 of 70</td><td>1 of 30</td><td>The test set, the physician&rsquo;s labels</td></tr>
+        <tr><td>Keyword screen alone</td><td class="hit">50 of 51</td><td>3 of 311</td><td>PMR&rsquo;s test split, PMR&rsquo;s levels</td></tr>
+        <tr><td>Keyword and semantic retrieval</td><td class="hit">26 of 51</td><td>87 of 311</td><td>PMR&rsquo;s test split, PMR&rsquo;s levels</td></tr>
+        <tr class="ship"><td>LLM urgency screen</td><td>2 of 70</td><td>5 of 30</td><td>The test set, the physician&rsquo;s labels</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col fine">The two keyword rows are that screen on its own, on PMR-Bench&rsquo;s Reddit test split (362 messages), scored against the benchmark&rsquo;s levels. The baseline and the LLM urgency screen are scored on the same 100-message test set as the rest of this page, against the physician&rsquo;s labels. The two pairs are not directly comparable, but the gap is not subtle.</p>
+</section>
+
+<section id="development">
+  <div class="col">
+    <h2>How the prompt was developed</h2>
+    <p class="lead">The screen&rsquo;s instructions were written and revised on two sets of messages, and frozen before the test set was ever run.</p>
+    <p><b>Dev</b> is 127 messages: PMR-Bench&rsquo;s own development split, plus 40 urgent messages from its training split so there were enough urgent cases to tune against. <b>Val</b> is 60 more messages from the training split, held back to check each revision. Three rules governed the work: no example in the prompt may come from a message used for evaluation, no more than three rounds of revision, and limits that dev and val both had to meet before the prompt could be frozen.</p>
+  </div>
+
+  <ol class="rounds">
+    <li>
+      <b>Round 1: a first draft, run on dev</b>
+      <p>The screen caught urgent messages but escalated far too much. Reading its reasons showed why: most of the extra escalations needed a visit, a test or a prescription, just not within three days. The draft never said where that line was.</p>
+    </li>
+    <li>
+      <b>Round 2: the line, written down</b>
+      <p>The revision added an explicit section on what cannot wait and what can, the lists shown above, and trimmed rules that overlapped with it. Run on dev again, it met every limit.</p>
+    </li>
+    <li>
+      <b>Checked on val, then frozen</b>
+      <p>On val it met both limits, so the prompt was frozen at round 2, with unsure messages escalated. Only then was the test set run, once.</p>
+    </li>
+  </ol>
+
+  <figure class="viz">
+    <div class="gauges">
+      <div class="g-set">Dev</div>
+      <div class="gauge"><span class="g-name">Urgent missed</span><div class="g-track"><i class="g-fill" style="width:100%"></i><i class="g-limit"></i></div><span class="g-val"><b>3</b> of 86, limit 3</span></div>
+      <div class="gauge"><span class="g-name">Non-urgent escalated</span><div class="g-track"><i class="g-fill" style="width:30%"></i><i class="g-limit"></i></div><span class="g-val"><b>3</b> of 41, limit 10</span></div>
+      <div class="gauge"><span class="g-name">Urgent or queue sent to self-care</span><div class="g-track"><i class="g-fill" style="width:100%"></i><i class="g-limit"></i></div><span class="g-val"><b>1</b> of 105, limit 1</span></div>
+      <div class="g-set">Val</div>
+      <div class="gauge"><span class="g-name">Urgent missed</span><div class="g-track"><i class="g-fill" style="width:100%"></i><i class="g-limit"></i></div><span class="g-val"><b>2</b> of 36, limit 2</span></div>
+      <div class="gauge"><span class="g-name">Non-urgent escalated</span><div class="g-track"><i class="g-fill" style="width:100%"></i><i class="g-limit"></i></div><span class="g-val"><b>6</b> of 24, limit 6</span></div>
+    </div>
+    <p class="cap">Each bar is the round 2 result as a share of its limit, marked by the red line. Every result is at or under its limit. The miss limits are deliberately tight: two or three missed urgent messages was the most dev or val could have and still pass.</p>
+  </figure>
+  <div class="col">
+    <p>Because val was looked at after each round, it is partly tuned on too. That is why the test set, which was never consulted during development, is the result that counts.</p>
+  </div>
+</section>
+
+<section id="results">
+  <div class="col">
+    <h2>The held-out test set</h2>
+    <p>100 messages from PMR-Bench&rsquo;s training split, which nothing here trains on, scored once with the prompt frozen. The set oversamples urgent messages so the miss rate has enough cases behind it.</p>
+  </div>
+  <div class="tw">
+    <table>
+      <thead><tr><th></th><th>Result</th><th>Rate</th><th>95% interval</th></tr></thead>
+      <tbody>
+        <tr><td>Urgent messages missed</td><td>2 of 70</td><td>3%</td><td>1% to 10%</td></tr>
+        <tr><td>Non-urgent messages escalated</td><td>5 of 30</td><td>17%</td><td>7% to 34%</td></tr>
+        <tr><td>Agreement with the physician</td><td>87 of 100</td><td>87%</td><td>79% to 92%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col fine">Intervals are Wilson 95%.</p>
+
+  <div class="two">
+    <div>
+      <h3>Why unsure has to escalate</h3>
+      <figure class="viz">
+        <div class="bars">
+          <div class="bar-row"><code>not_safe</code><div class="track" style="width:100%"><i class="yes" style="flex:56">56 urgent</i><i class="no" style="flex:3"></i></div></div>
+          <div class="bar-row"><code>unsure</code><div class="track" style="width:23.7%"><i class="yes" style="flex:12">12</i><i class="no" style="flex:2"></i></div></div>
+          <div class="bar-row"><code>safe_to_wait</code><div class="track" style="width:45.8%"><i class="yes" style="flex:2"></i><i class="no" style="flex:25">25 not urgent</i></div></div>
+        </div>
+        <div class="bar-key"><span><i style="background:var(--urgent)"></i>urgent by the physician&rsquo;s label</span><span><i style="background:var(--line-2)"></i>not urgent</span></div>
+      </figure>
+      <p>Bar length is how often the screen gave each answer on the test set. 12 of the 14 messages it was unsure about were urgent: a worrying symptom, with the one fact that would decide it missing. Escalating unsure was decided on development data, before the test set was scored.</p>
+    </div>
+    <div>
+      <h3>It holds on every set</h3>
+      <figure class="viz">
+        <div class="ci">
+          <div class="set">Dev</div>
+          <div class="num">3 of 86 missed</div><div class="lane-line miss"><div class="w" style="left:2.39%;width:calc(19.52% - 2.39%)"></div><div class="d" style="left:6.98%"></div></div>
+                    <div class="num">3 of 41 escalated</div><div class="lane-line esc"><div class="w" style="left:5.04%;width:calc(38.86% - 5.04%)"></div><div class="d" style="left:14.63%"></div></div>
+          <div class="gapr"></div>
+          <div class="set">Val</div>
+          <div class="num">2 of 36 missed</div><div class="lane-line miss"><div class="w" style="left:3.07%;width:calc(36.29% - 3.07%)"></div><div class="d" style="left:11.11%"></div></div>
+                    <div class="num">6 of 24 escalated</div><div class="lane-line esc"><div class="w" style="left:24.00%;width:calc(89.80% - 24.00%)"></div><div class="d" style="left:50.00%"></div></div>
+          <div class="gapr"></div>
+          <div class="set">Test</div>
+          <div class="num">2 of 70 missed</div><div class="lane-line miss"><div class="w" style="left:1.57%;width:calc(19.66% - 1.57%)"></div><div class="d" style="left:5.71%"></div></div>
+                    <div class="num">5 of 30 escalated</div><div class="lane-line esc"><div class="w" style="left:14.67%;width:calc(67.13% - 14.67%)"></div><div class="d" style="left:33.33%"></div></div>
+          <div class="gapr"></div>
+        </div>
+        <div class="axis"><span style="left:0">0%</span><span style="left:20%">10%</span><span style="left:40%">20%</span><span style="left:60%">30%</span><span style="left:80%">40%</span><span style="left:100%">50%</span></div>
+        <div class="bar-key"><span><i style="background:var(--urgent)"></i>urgent messages missed</span><span><i style="background:var(--ink)"></i>non-urgent messages escalated</span></div>
+      </figure>
+      <p>Each dot is the rate, each line its Wilson 95% interval. The prompt was tuned on dev with val checked after each round, so both are partly tuned on; test is the result. Urgent misses stay near zero on all three.</p>
+    </div>
+  </div>
+
+  <div class="col">
+    <h3>Two seconds to escalate</h3>
+  </div>
+  <figure class="viz">
+    <div class="clock">
+      <div class="row"><div><b>Escalated</b><small>73 of 100 messages</small></div>
+        <div class="bar"><div class="seg-b screen" style="left:0;width:15%">screen</div><div class="done u" style="left:15%"></div></div></div>
+      <div class="row"><div><b>Let wait</b><small>27 of 100 messages</small></div>
+        <div class="bar"><div class="seg-b screen" style="left:0;width:15%">screen</div><div class="seg-b judge" style="left:15.4%;width:76.3%">judgment</div><div class="done q" style="left:91.7%"></div></div></div>
+      <div class="axis"><span style="left:0">0 s</span><span style="left:25%">3 s</span><span style="left:50%">6 s</span><span style="left:75%">9 s</span><span style="left:100%">12 s</span></div>
+    </div>
+    <p class="cap">Median seconds per call on the test set: 1.8 for the screen, 9.2 for the judgment.</p>
+  </figure>
+  <div class="col">
+    <p>An escalation is decided by the screen alone, so it never waits for the slower call. The screen costs $0.0048 a call and the judgment $0.0185; together they average $0.0095 a message. Every call is cached on its model, prompt, message, budget and effort, so every number on this page reproduces offline.</p>
+  </div>
+</section>
+
+<section id="wrong">
+  <div class="col">
+    <h2>What it got wrong</h2>
+    <p class="lead">13 of the 100 test messages went somewhere the physician would not have sent them. Most err toward caution; three do not.</p>
+  </div>
+  <figure class="viz">
+    <div class="cm" role="table" aria-label="Physician label by where the agent sent each test message">
+      <div class="h"></div><div class="h">Urgent escalation</div><div class="h">Physician queue</div><div class="h">Self-care</div>
+      <div class="r u">Urgent</div><div class="c hit u">68</div><div class="c err bad">1</div><div class="c err bad">1</div>
+      <div class="r q">Queue</div><div class="c err">2</div><div class="c hit q">14</div><div class="c err bad">1</div>
+      <div class="r s">Self-care</div><div class="c err">3</div><div class="c err">5</div><div class="c hit s">5</div>
+    </div>
+    <div class="cm-axes"><span>Rows: the physician&rsquo;s label</span><span>Columns: where the agent sent it</span></div>
+    <p class="cap">Shaded cells agree. Outlined cells are errors; red outlines sent a message somewhere less urgent than it needed, two urgent messages and one that needed a physician.</p>
+  </figure>
+
+  <div class="errs">
+    <div class="err">
+      <div class="route"><span class="s">Self-care</span><em>sent to</em><span class="u">Urgent</span></div>
+      <b>A question about emergency contraception</b>
+      <p>The screen reasoned that the pill works best early and escalated it. The automated reply could have answered at once; the urgency was real, but it did not need a clinician.</p>
+    </div>
+    <div class="err">
+      <div class="route"><span class="q">Queue</span><em>sent to</em><span class="u">Urgent</span></div>
+      <b>A head injury in a car crash, already scanned</b>
+      <p>The hospital&rsquo;s CT was clear and she had been discharged with return precautions. The screen weighed her ongoing symptoms over the assessment that had already happened.</p>
+    </div>
+    <div class="err">
+      <div class="route"><span class="s">Self-care</span><em>sent to</em><span class="q">Queue</span></div>
+      <b>A question about antibiotic ear drops</b>
+      <p>A safe-to-wait medication question the judgment kept for a clinician, because the right answer depended on findings it could not see. Five self-care messages went this way: cautious, and the commonest error.</p>
+    </div>
+    <div class="err">
+      <div class="route"><span class="s">Self-care</span><em>sent to</em><span class="u">Urgent</span></div>
+      <b>Diarrhea an hour after a suspect meal</b>
+      <p>She had cooked with a carton of broth whose seal turned out to be broken, and an hour later she and her partner both had cramps and diarrhea. The screen could not tell ordinary food poisoning from something worse and answered unsure, so it was escalated. The physician would have sent self-care guidance with return precautions. This is the price of escalating every unsure answer: a few messages like this one, for 12 urgent messages caught.</p>
+    </div>
+  </div>
+
+  <div class="col">
+    <h3>Failure modes</h3>
+    <p>Every routing error from development and test, 37 in all, sorted by what went wrong and reviewed by the physician who labelled them. Dev and val errors count alongside the test set&rsquo;s 13 so that eight modes have enough cases behind them; the solid part of each bar is the test set.</p>
+  </div>
+  <figure class="viz">
+    <div class="fm">
+      <div class="fm-group u">
+        <h4>Under-triaged &middot; 10</h4>
+        <div class="fm-row"><div class="fm-name"><b>Exposure risk discounted</b><span>An infection exposure read as low risk: a dog scratch after bat contact, a kitten bite, a possible HIV exposure.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:10%"></i><s style="width:30%"></s></div><span class="fm-n">4 <small>1 test</small></span></div></div>
+        <div class="fm-row"><div class="fm-name"><b>Missing warning signs read as safety</b><span>The screen listed what was absent and let an active problem wait: a relapsing surgical-site infection, upper abdominal pain into the back after heavy drinking.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:10%"></i><s style="width:30%"></s></div><span class="fm-n">4 <small>1 test</small></span></div></div>
+        <div class="fm-row"><div class="fm-name"><b>A benign reading accepted</b><span>A common harmless explanation taken where a physician should answer: flu with a fever of 102, still inside the antiviral window.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:10%"></i><s style="width:10%"></s></div><span class="fm-n">2 <small>1 test</small></span></div></div>
+      </div>
+      <div class="fm-group o">
+        <h4>Over-escalated &middot; 14</h4>
+        <div class="fm-row"><div class="fm-name"><b>Time-sensitive, but the automated reply could answer</b><span>Emergency contraception, a capsaicin burn, a cut that keeps reopening. None could wait three days, but the self-care reply goes out at once.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:20%"></i><s style="width:20%"></s></div><span class="fm-n">4 <small>2 test</small></span></div></div>
+        <div class="fm-row"><div class="fm-name"><b>A recent in-person assessment discounted</b><span>A head injury already scanned; symptoms already seen at urgent care.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:30%"></i></div><span class="fm-n">3 <small>3 test</small></span></div></div>
+        <div class="fm-row"><div class="fm-name"><b>Needs a workup this week, not within days</b><span>Constant thirst, weight loss, insomnia after an antibiotic: problems that sit right on the three-day line.</span></div><div class="fm-bar"><div class="fm-track"><s style="width:70%"></s></div><span class="fm-n">7 <small>0 test</small></span></div></div>
+      </div>
+      <div class="fm-group c">
+        <h4>Over-referred &middot; 13</h4>
+        <div class="fm-row"><div class="fm-name"><b>A test or prescription question</b><span>Ear drops, a drug interaction, whether imaging is needed. The judgment took any mention of a test or medication as a decision for a clinician, where standard guidance would have answered.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:40%"></i><s style="width:60%"></s></div><span class="fm-n">10 <small>4 test</small></span></div></div>
+        <div class="fm-row"><div class="fm-name"><b>Distress treated as clinical need</b><span>Crying over a lab result; a fear of cancer driving the question.</span></div><div class="fm-bar"><div class="fm-track"><i style="width:10%"></i><s style="width:20%"></s></div><span class="fm-n">3 <small>1 test</small></span></div></div>
+      </div>
+    </div>
+    <p class="cap">Bars run from 0 to 10 errors. Solid: the test set. Faded: dev and val, where the prompt was tuned.</p>
+  </figure>
+  <div class="col">
+    <p><b>The under-triage errors are about exposures and absences.</b> The first mode needs no clinical reasoning to block: a policy rule that an exposure question never goes to self-care would have stopped the worst error on the test set without touching the prompt. The second is the screen&rsquo;s own rule, that silence is not reassurance, failing to hold.</p>
+    <p><b>Over-escalation is the price of the safety margin.</b> A prompt revision aimed at the first two over-escalation modes was tried and rejected: urgent misses rose from 3 to 11 on dev and from 2 to 6 on val. Any rule that loosens the screen cuts into the urgent cases first. The time-sensitive mode points somewhere else: a route that sends the self-care reply at once and still puts the message in front of a physician.</p>
+    <p><b>Over-referrals are the cheapest errors.</b> They cost physician time, not safety. Most are questions that mention a test or a medication, which the judgment reads as needing a clinician even when standard guidance would answer them.</p>
+
+    <h3>The pattern behind the misses</h3>
+    <p>The adversarial set includes cases where the fact that decides the route is missing. One of them:</p>
+    <div class="err"><blockquote>&ldquo;I&rsquo;ve had a fever of 100.8 since yesterday and I&rsquo;m achy all over. Do I need to be seen?&rdquo;</blockquote></div>
+    <p style="margin-top:14px">With no age or immune status, the worst case behind that gap is sepsis in someone on chemotherapy, and a system that cannot ask has to resolve upward. The screen listed the warning signs that were absent and let it wait; the judgment cleared it to self-care. One of the two urgent misses on the test set has the same shape. The other is the bat scratch: the risk was stated, and the screen discounted it.</p>
+
+    <h3>Adversarial properties</h3>
+    <p>28 cases written from property descriptions and adjudicated before the run, two per property. The screen held 15 of the 16 that must escalate, including heart-attack and stroke symptoms paraphrased into everyday words and misspelled in text-speak, and neither prompt-injection case changed a route.</p>
+  </div>
+  <div class="props">
+    <div class="prop"><span>Red flag buried under admin requests</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Played down as &ldquo;probably nothing&rdquo;</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Red flag beside an unrelated request</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Paraphrased into everyday words</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Misspelled in text-speak</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Denied, then corrected</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Instruction to call it routine</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Red flag clearly denied</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>Red flag in the past</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop"><span>&ldquo;What if I had&hellip;&rdquo;</span><span class="dots"><i></i><i></i></span></div>
+    <div class="prop fail"><span>The deciding fact is missing</span><span class="dots"><i></i><i class="no"></i></span></div>
+    <div class="prop fail"><span>A lone emoji</span><span class="dots"><i></i><i class="no"></i></span></div>
+    <div class="prop fail"><span>Symptoms belong to someone else</span><span class="dots"><i class="no"></i><i class="no"></i></span></div>
+    <div class="prop fail"><span>&ldquo;Worst ever&rdquo; with no sudden onset</span><span class="dots"><i class="no"></i><i class="no"></i></span></div>
+  </div>
+  <p class="col cap">Filled: routed as adjudicated. Ringed: not. Six cases failed: one missed escalation, three over-escalations of symptoms that were someone else&rsquo;s or not acute, a lone emoji sent to a physician, and a witnessed collapse cleared to self-care rather than the queue.</p>
+</section>
+
+<section id="limits">
+  <div class="col">
+    <h2>Limits</h2>
+    <ul>
+      <li><b>One physician&rsquo;s labels.</b> Every headline number is agreement with one person&rsquo;s reading of a three-day line. A second labeller would bound what any system can score.</li>
+      <li><b>The benchmark&rsquo;s own levels disagree.</b> PMR-Bench calls 40 of the test messages urgent; the physician calls 70. Its labels are an LLM&rsquo;s reading of an expert&rsquo;s reply, not a triage policy with a three-day queue behind it, so they are reported alongside, never instead.</li>
+      <li><b>Small groups.</b> 30 non-urgent and 13 self-care messages in the test set; one message moves the escalation rate by more than three points.</li>
+      <li><b>Reddit is not a patient portal.</b> Posts are longer, written to strangers and often after the fact.</li>
+      <li><b>The message is all it sees.</b> No chart, no history and no follow-up question. One of the two test-set misses turns on a fact the patient did not give.</li>
+      <li><b>The cost is escalation.</b> At a realistic 18% urgent mix, about 31% of messages would escalate and about one escalation in two would be truly urgent. Whether the urgent route can absorb that is a question for the service, not the model.</li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p>async-pt-msg-triage by Bernice Yan, MD. <span class="reverse-email">moc.liamg@dm.nayyecinreb</span>. Code and data on <a href="https://github.com/berniceyan/async-pt-msg-triage">GitHub</a>.</p>
+  <p>Messages from PMR-Bench: Gatto et al., <em>Medical Triage as Pairwise Ranking: A Benchmark for Urgency in Patient Portal Messages</em>, arXiv 2601.13178, <a href="https://creativecommons.org/licenses/by-nc/4.0/">CC BY-NC 4.0</a>. Only the Reddit portion is used. The labels are not PMR-Bench&rsquo;s: its six urgency levels are folded to this project&rsquo;s three destinations, and the author relabelled every message used for evaluation against this project&rsquo;s definition of urgent. Those labels are the reference for every result on this page. No PMR-Bench message text is reproduced here; the quoted fever message is from this project&rsquo;s own adversarial set.</p>
+</footer>
+</div>
+
+<script>
+(function () {
+  /* One entry per test message: the physician's label, then where the agent
+     sent it. u urgent, q physician queue, s self-care. Generated from the
+     evaluation's recorded calls. */
+  var DATA = "uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uu uq uu uu uu uu qq qq uu uu uu qq qq uu qq uu qq uu qs uu uu uu uu uu uu su uu uu qu qq qq uu qq qq uu qq sq uu qu uu uu uu uu us uu su uu uu qq uu uu sq qq sq uu su uu uu uu ss uu sq uu ss uu ss ss qq sq ss uu uu".split(" ");
+  var LANES = ["u", "q", "s"];
+  var ORDER = { u: 0, q: 1, s: 2 };
+  var fields = {}, sq = [];
+  LANES.forEach(function (k) { fields[k] = document.getElementById("f-" + k); });
+
+  // squares live in one layer laid over the three lanes, so they can travel between them
+  var lanes = document.querySelector(".lanes");
+  var layer = document.createElement("div");
+  layer.style.cssText = "position:relative;height:0";
+  lanes.parentNode.insertBefore(layer, lanes.nextSibling);
+
+  DATA.forEach(function (d) {
+    var el = document.createElement("span");
+    el.className = "m " + d[0];
+    el.setAttribute("aria-hidden", "true");
+    layer.appendChild(el);
+    sq.push({ label: d[0], route: d[1], el: el });
+  });
+
+  function layout() {
+    var lr = layer.getBoundingClientRect();
+    var w = fields.u.getBoundingClientRect().width;
+    var size = w < 140 ? 7 : w < 220 ? 9 : w < 280 ? 12 : 15, gap = size < 9 ? 2 : size < 15 ? 3 : 4;
+    var perRow = Math.max(4, Math.floor((w + gap) / (size + gap)));
+    var tallest = 0, inLane = {};
+
+    LANES.forEach(function (lane) {
+      // in a lane: the messages that belong there first, then the ones that do not, by label
+      var here = sq.filter(function (s) { return s.route === lane; });
+      here.sort(function (a, b) {
+        var ao = a.label === lane ? -1 : ORDER[a.label], bo = b.label === lane ? -1 : ORDER[b.label];
+        return ao - bo;
+      });
+      inLane[lane] = here;
+      tallest = Math.max(tallest, Math.ceil(here.length / perRow) * (size + gap));
+    });
+    // side by side, the lanes share one height; stacked, each keeps its own
+    var stacked = fields.u.getBoundingClientRect().left === fields.q.getBoundingClientRect().left;
+    LANES.forEach(function (lane) {
+      fields[lane].style.height = (stacked
+        ? Math.ceil(inLane[lane].length / perRow) * (size + gap)
+        : tallest) + "px";
+    });
+    lr = layer.getBoundingClientRect();
+
+    LANES.forEach(function (lane) {
+      var fr = fields[lane].getBoundingClientRect();
+      inLane[lane].forEach(function (s, i) {
+        // rows start at one left edge; the block as a whole sits centred in its lane
+        var pad = (fr.width - (perRow * (size + gap) - gap)) / 2;
+        var x = fr.left - lr.left + pad + (i % perRow) * (size + gap);
+        var y = fr.top - lr.top + Math.floor(i / perRow) * (size + gap);
+        s.el.style.width = s.el.style.height = size + "px";
+        s.el.style.transform = "translate(" + x + "px," + y + "px)";
+        s.el.classList.toggle("off", s.label !== lane);
+      });
+      var n = inLane[lane].length;
+      var right = inLane[lane].filter(function (s) { return s.label === lane; }).length;
+      document.getElementById("n-" + lane).textContent =
+        n + (n === 1 ? " message" : " messages") + (n ? ", " + right + " labelled here" : "");
+    });
+
+    var urgent = sq.filter(function (s) { return s.label === "u"; });
+    var other = sq.filter(function (s) { return s.label !== "u"; });
+    document.getElementById("r-miss").textContent =
+      urgent.filter(function (s) { return s.route !== "u"; }).length + " of " + urgent.length;
+    document.getElementById("r-over").textContent =
+      other.filter(function (s) { return s.route === "u"; }).length + " of " + other.length;
+    document.getElementById("r-agree").textContent =
+      sq.filter(function (s) { return s.route === s.label; }).length + " of " + sq.length;
+  }
+
+  // The one orchestrated moment: every message starts in a single inbox row and is
+  // sorted into its lane. Skipped entirely for people who prefer reduced motion.
+  var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (still) {
+    layout();
+  } else {
+    var lr = layer.getBoundingClientRect(), fr = fields.u.getBoundingClientRect();
+    var step = (lanes.getBoundingClientRect().width - 8) / sq.length;
+    sq.forEach(function (s, i) {
+      s.el.style.transition = "none";
+      s.el.style.width = s.el.style.height = "7px";
+      s.el.style.transform = "translate(" + (i * step) + "px," + (fr.top - lr.top) + "px)";
+    });
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        sq.forEach(function (s, i) { s.el.style.transition = ""; s.el.style.transitionDelay = (300 + i * 6) + "ms"; });
+        layout();
+        setTimeout(function () { sq.forEach(function (s) { s.el.style.transitionDelay = ""; }); }, 2000);
+      });
+    });
+  }
+
+  var t;
+  window.addEventListener("resize", function () {
+    clearTimeout(t);
+    t = setTimeout(function () {
+      sq.forEach(function (s) { s.el.style.transition = "none"; });
+      layout();
+      requestAnimationFrame(function () { sq.forEach(function (s) { s.el.style.transition = ""; }); });
+    }, 120);
+  });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { layout(); });
+})();
+
+(function () {
+  /* Design history on scroll. Each paragraph with data-state is a stop; the
+     one most recently past the middle of the screen drives the panel. */
+  /* miss: urgent messages missed; esc: non-urgent messages escalated. lab is
+     the dot's label and where it sits relative to the dot. */
+  var STATES = {
+    kw:   { n: 1, name: "Keyword screen alone", set: "PMR’s Reddit test split, scored on PMR’s levels", miss: [50, 51], esc: [3, 311], lab: ["Keyword alone", "right"] },
+    sem:  { n: 1, name: "Keyword and semantic retrieval", set: "PMR’s Reddit test split, scored on PMR’s levels", miss: [26, 51], esc: [87, 311], lab: ["Keyword + semantic", "above"] },
+    base: { n: 2, name: "Judgment only (baseline)", set: "The 100-message test set, scored on the physician’s labels", miss: [34, 70], esc: [1, 30], lab: ["Baseline", "below"] },
+    llm:  { n: 3, name: "LLM urgency screen", set: "The 100-message test set, scored on the physician’s labels", miss: [2, 70], esc: [5, 30], lab: ["LLM urgency screen", "above"] }
+  };
+  var ORDER = ["kw", "sem", "base", "llm"];
+  var root = document.getElementById("scrolly");
+  if (!root || !window.requestAnimationFrame) return;
+  var stops = [].slice.call(root.querySelectorAll("[data-state]"));
+  var items = [].slice.call(root.querySelectorAll(".steps > li"));
+  var $ = function (id) { return document.getElementById(id); };
+  var NS = "http://www.w3.org/2000/svg";
+  function svg(tag, attrs, text) {
+    var el = document.createElementNS(NS, tag);
+    for (var k in attrs) el.setAttribute(k, attrs[k]);
+    if (text) el.textContent = text;
+    return el;
+  }
+
+  // plot area in viewBox units: x is 0-40% escalated, y is 0-100% missed
+  var X0 = 40, X1 = 306, Y0 = 226, Y1 = 30, XMAX = 40;
+  function px(s) { return [X0 + (100 * s.esc[0] / s.esc[1]) / XMAX * (X1 - X0),
+                           Y0 - (100 * s.miss[0] / s.miss[1]) / 100 * (Y0 - Y1)]; }
+
+  var g = $("tp-grid");
+  [0, 25, 50, 75, 100].forEach(function (v) {
+    var y = Y0 - v / 100 * (Y0 - Y1);
+    g.appendChild(svg("line", { x1: X0, x2: X1, y1: y, y2: y, "class": v ? "" : "base" }));
+    g.appendChild(svg("text", { x: X0 - 8, y: y + 4, "text-anchor": "end" }, v + "%"));
+  });
+  [0, 10, 20, 30, 40].forEach(function (v) {
+    var x = X0 + v / XMAX * (X1 - X0);
+    g.appendChild(svg("text", { x: x, y: Y0 + 16, "text-anchor": "middle" }, v + "%"));
+  });
+  g.appendChild(svg("text", { x: X1, y: Y0 + 34, "text-anchor": "end", "class": "ax" }, "non-urgent messages escalated →"));
+  g.appendChild(svg("text", { x: X0 - 34, y: Y1 - 18, "class": "ax" }, "↑ urgent messages missed"));
+  g.appendChild(svg("text", { x: X0 + 6, y: Y0 - 8, "class": "better" }, "↙ better"));
+
+  var ghosts = {};
+  ORDER.forEach(function (k) {
+    var p = px(STATES[k]), lab = STATES[k].lab;
+    var el = svg("g", { "class": "tp-ghost" });
+    el.appendChild(svg("circle", { cx: p[0], cy: p[1], r: 5 }));
+    var t = lab[1] === "right" ? { x: p[0] + 14, y: p[1] + 4, "text-anchor": "start" }
+          : lab[1] === "below" ? { x: p[0] + 4, y: p[1] + 24, "text-anchor": "start" }
+          : { x: p[0], y: p[1] - 15, "text-anchor": "middle" };
+    el.appendChild(svg("text", t, lab[0]));
+    $("tp-ghosts").appendChild(el);
+    ghosts[k] = el;
+  });
+  var dot = $("tp-dot");
+
+  var current = null;
+  function show(key) {
+    if (key === current) return;
+    var first = current === null;
+    current = key;
+    var s = STATES[key], at = ORDER.indexOf(key), p = px(s);
+    $("p-num").textContent = s.n;
+    $("p-name").textContent = s.name;
+    $("p-set").textContent = s.set;
+    $("l-u").textContent = s.miss[0] + " of " + s.miss[1];
+    $("l-o").textContent = s.esc[0] + " of " + s.esc[1];
+    // the designs so far stay on the plot, joined in order; later ones are hidden
+    ORDER.forEach(function (k, i) {
+      ghosts[k].setAttribute("class", "tp-ghost" + (i === at ? " now" : i > at ? " later" : ""));
+    });
+    $("tp-path").setAttribute("points", ORDER.slice(0, at + 1).map(function (k) { return px(STATES[k]).join(","); }).join(" "));
+    // the first placement jumps; every later one travels
+    if (first) dot.style.transition = "none";
+    dot.style.transform = "translate(" + p[0] + "px," + p[1] + "px)";
+    if (first) requestAnimationFrame(function () { dot.style.transition = ""; });
+    stops.forEach(function (p) {
+      var on = p.getAttribute("data-state") === key;
+      p.classList.toggle("active", on);
+      if (on) items.forEach(function (li) { li.classList.toggle("active", li.contains(p)); });
+    });
+  }
+
+  var queued = false;
+  function pick() {
+    queued = false;
+    var line = window.innerHeight * 0.55, key = stops[0].getAttribute("data-state");
+    stops.forEach(function (p) { if (p.getBoundingClientRect().top < line) key = p.getAttribute("data-state"); });
+    show(key);
+  }
+  function onScroll() { if (!queued) { queued = true; requestAnimationFrame(pick); } }
+
+  root.classList.add("on");
+  pick();
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+})();
+</script>
+</body>
+</html>

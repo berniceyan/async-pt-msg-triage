@@ -1,0 +1,33 @@
+Urgency screen: how it is judged. FROZEN at round 2: prompts/screen.txt as of 2026-10-22, unsure -> URGENT.
+
+Pipeline
+  1. Screen (prompts/screen.txt), one call per message: safe_to_wait | unsure | not_safe.
+  2. not_safe -> URGENT. unsure -> per the setting below. safe_to_wait -> step 3.
+  3. The judgment step decides queue vs self-care via needs_physician_action.
+     Its can't-miss probabilities are no longer used for routing.
+  A screen call that fails to parse routes to URGENT (fail toward escalation).
+
+The one setting
+  unsure -> URGENT (default), or unsure -> queue.
+  Pick: unsure -> URGENT if it meets the dev bars; else unsure -> queue if that does; else revise.
+
+Tuning set ("dev"): pmr_dev (87, clinician labels) + ext_dev_add (40, PMR-urgent).
+  Urgent 86, not urgent 41.
+
+Dev bars (all must hold)
+  urgent missed           <= 3/86
+  over-triage             <= 10/41
+  urgent/queue to self-care <= 1/105  (judgment step unchanged; checks nothing regressed)
+
+Val (ext_val, 60 clinician labels: 36 urgent, 24 not) -- checked once per round that passes dev
+  urgent missed           <= 2/36
+  over-triage             <= 6/24
+  A round that fails val may be revised on dev and re-checked. At most 3 rounds in total.
+  Because val is consulted each round it is partly tuned on; it is reported, but test is the result.
+
+Test (ext_test, 100 clinician labels: 70 urgent, 30 not)
+  Scored once at the frozen screen, prompt and setting. Never swept, never revised.
+  Per-class rates as measured; anything mixing classes reweighted to ~18% urgent.
+
+Prompt rules
+  No examples drawn from dev, dev_add, val or test, or from PMR's test split.

@@ -1,0 +1,10 @@
+# core -- needed for everything
+pydantic>=2.6
+openai>=1.40          # OpenRouter speaks the OpenAI API
+
+# the evaluation data: PMR-Bench parquet at a pinned revision (make data).
+huggingface_hub>=0.24
+pyarrow>=15
+
+# tests
+pytest>=8.0

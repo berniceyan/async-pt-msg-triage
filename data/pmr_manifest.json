@@ -1,0 +1,56 @@
+{
+  "source": "PMR-Bench, arXiv 2601.13178",
+  "license": "CC BY-NC 4.0",
+  "revisions": {
+    "PMR-Reddit-Test-Pairs": "f72f5fe3d322397505ebc3bcb216c5f86af14c04",
+    "PMR-Reddit-Train-Dev-Pool": "dea9728b18f356ed7ab1ee08e27b56391861bc7b"
+  },
+  "mapping_version": "pmr3-v1",
+  "splits": {
+    "test": {
+      "file": "data/pmr_test.csv",
+      "sha256": "e7e9c1a8f26b4aaed13368ae9597171baeff2a0a4e7478445369b458f9ecfa63",
+      "n": 362,
+      "by_source": {
+        "reddit": 362
+      },
+      "reference": {
+        "ASYNC_PHYSICIAN": 110,
+        "SELF_CARE": 183,
+        "URGENT_ESCALATION": 69
+      },
+      "soft": 15,
+      "median_words": 142.0
+    },
+    "dev": {
+      "file": "data/pmr_dev.csv",
+      "sha256": "5a614ab1aeb5ab08a67f68f30a6dd6bd88a5ae646fe0b3374516696d77a5ad07",
+      "n": 87,
+      "by_source": {
+        "reddit": 87
+      },
+      "reference": {
+        "ASYNC_PHYSICIAN": 28,
+        "SELF_CARE": 43,
+        "URGENT_ESCALATION": 16
+      },
+      "soft": 6,
+      "median_words": 141
+    },
+    "extended": {
+      "file": "data/pmr_extended.csv",
+      "sha256": "c825b220a6d00598d8d4b79493e11c90e565c77fe79a103eab0d7814e5a44490",
+      "n": 772,
+      "by_source": {
+        "reddit": 772
+      },
+      "reference": {
+        "ASYNC_PHYSICIAN": 246,
+        "SELF_CARE": 384,
+        "URGENT_ESCALATION": 142
+      },
+      "soft": 30,
+      "median_words": 142.0
+    }
+  }
+}

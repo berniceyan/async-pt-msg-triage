@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.DS_Store
+results/
+# PMR-Bench text is CC BY-NC + Reddit policy: rebuilt by `make data`, never committed
+data/pmr_*.csv
+data/ext_*.csv
